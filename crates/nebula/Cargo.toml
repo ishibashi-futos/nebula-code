@@ -1,0 +1,27 @@
+[package]
+name = "nebula"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nebula Code — Rust/GPUI ネイティブエディタ"
+
+[[bin]]
+name = "nebula"
+path = "src/main.rs"
+
+[dependencies]
+nebula-protocol.workspace = true
+nebula-core.workspace = true
+
+gpui.workspace = true
+ropey.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+
+# gpui が内部で使っている非同期ランタイム。GUI プロセスに 2 つ目のランタイムを
+# 持ち込まないために、IPC の非同期チャネルも smol のものを使う。
+smol = "2"
