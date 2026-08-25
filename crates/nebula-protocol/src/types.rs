@@ -176,6 +176,56 @@ pub enum TokenKind {
 }
 
 // ---------------------------------------------------------------------------
+// Markdown プレビュー
+// ---------------------------------------------------------------------------
+
+/// Markdown プレビューに描くべき要素 1 つ。
+///
+/// 構文解析 (tree-sitter) はバックエンドの `nebula_core::markdown_preview::parse_preview`
+/// が行い、この列だけを IPC で GUI へ渡す。`HighlightSpan` と同じ理由 (GUI プロセスを
+/// 軽く保つ) で、GUI 側では tree-sitter を一切動かさない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PreviewBlock {
+    /// 見出し。`level` は 1〜6 (ATX `#`〜`######`、Setext `===`/`---` はそれぞれ 1/2 に写す)。
+    Heading { level: u8, text: String },
+    /// 箇条書き・順序付きリスト・チェックリストの 1 項目。
+    ///
+    /// `depth` はネストの深さ (最も外側が 0)。ネストしたリストは項目の子として
+    /// 現れるので、そのぶん `depth` を 1 つずつ増やして辿る。
+    ListItem {
+        depth: u8,
+        marker: ListMarker,
+        text: String,
+    },
+    /// フェンス付きコードブロック。`language` は ```` ``` ```` の直後に書かれた
+    /// 情報文字列 (例: `rust`)。書かれていなければ `None`。
+    CodeBlock {
+        language: Option<String>,
+        code: String,
+    },
+    /// 引用の 1 段落。`depth` は `>` の入れ子の深さ (`>` 単体なら 1、`>>` なら 2)。
+    Quote { depth: u8, text: String },
+    /// 通常の段落。
+    Paragraph { text: String },
+    /// 水平線 (`---` / `***` / `___`)。
+    ThematicBreak,
+}
+
+/// リスト項目の行頭記号の種類。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ListMarker {
+    /// 順序無し箇条書き (`-` / `*` / `+`)。見た目の記号はプレビューでは区別しない。
+    Bullet,
+    /// 順序付き。実際にソースへ書かれていた番号をそのまま持つ
+    /// (5 から始まるリストなら `Ordered(5)`)。
+    Ordered(u64),
+    /// 未チェックのチェックリスト項目 (`- [ ] `)。
+    TaskUnchecked,
+    /// チェック済みのチェックリスト項目 (`- [x] `)。
+    TaskChecked,
+}
+
+// ---------------------------------------------------------------------------
 // ファイルシステム
 // ---------------------------------------------------------------------------
 

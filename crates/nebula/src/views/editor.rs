@@ -217,9 +217,9 @@ impl EditorArea {
             .unwrap_or_else(|| "無題".to_string());
         let buffer_id = snapshot.id;
         let path = snapshot.path.clone();
-        let view = cx.new(|cx| EditorView::new(client, workspace, snapshot, cx));
+        let view = cx.new(|cx| EditorView::new(client.clone(), workspace, snapshot, cx));
         let subscription = cx.subscribe(&view, Self::on_editor_event);
-        let preview = cx.new(|_cx| MarkdownPreviewView::new(view.clone()));
+        let preview = cx.new(|_cx| MarkdownPreviewView::new(view.clone(), client, buffer_id));
 
         if let Some(position) = position {
             view.update(cx, |view, cx| view.reveal_position(position, cx));

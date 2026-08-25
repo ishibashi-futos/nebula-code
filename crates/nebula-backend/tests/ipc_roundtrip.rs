@@ -6,8 +6,8 @@
 
 use nebula_backend::{BackendState, ipc, tools};
 use nebula_protocol::{
-    ClientMessage, Edit, FrameDecoder, PROTOCOL_VERSION, Request, RequestId, Response,
-    ServerMessage, TextRange, encode_frame,
+    ClientMessage, Edit, FrameDecoder, ListMarker, PROTOCOL_VERSION, PreviewBlock, Request,
+    RequestId, Response, ServerMessage, TextRange, encode_frame,
 };
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -299,6 +299,53 @@ fn 一時バッファを作って編集できる() {
     }) {
         Ok(Response::BufferVersion { .. }) => {}
         other => panic!("一時バッファを編集できない: {other:?}"),
+    }
+}
+
+/// Markdown プレビューの構文解析がバックエンドで行われ、要素列が返ることを確かめる。
+///
+/// GUI プロセスは tree-sitter を一切動かさない設計 (`ARCHITECTURE.md`) なので、
+/// この経路が通しで動くことを IPC 越しに確認しておく。個々のブロック変換の
+/// 網羅的なケースは `nebula-core` の単体テスト (`markdown_preview.rs`) 側にある。
+#[test]
+fn markdownプレビューの要素列が返る() {
+    let mut h = Harness::start("mdpreview");
+    let workspace = match h.request(Request::OpenWorkspace {
+        root: h.root().to_path_buf(),
+    }) {
+        Ok(Response::Workspace(info)) => info.id,
+        other => panic!("{other:?}"),
+    };
+    let path = h.write_file("note.md", "# 見出し\n\n- 項目1\n- 項目2\n");
+    let buffer = match h.request(Request::OpenBuffer { workspace, path }) {
+        Ok(Response::Buffer(s)) => s,
+        other => panic!("{other:?}"),
+    };
+
+    match h.request(Request::MarkdownPreview { buffer: buffer.id }) {
+        Ok(Response::MarkdownPreview { version, blocks }) => {
+            assert_eq!(version, buffer.version);
+            assert_eq!(
+                blocks,
+                vec![
+                    PreviewBlock::Heading {
+                        level: 1,
+                        text: "見出し".into(),
+                    },
+                    PreviewBlock::ListItem {
+                        depth: 0,
+                        marker: ListMarker::Bullet,
+                        text: "項目1".into(),
+                    },
+                    PreviewBlock::ListItem {
+                        depth: 0,
+                        marker: ListMarker::Bullet,
+                        text: "項目2".into(),
+                    },
+                ]
+            );
+        }
+        other => panic!("プレビューを取得できない: {other:?}"),
     }
 }
 
