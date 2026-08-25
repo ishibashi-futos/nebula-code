@@ -26,6 +26,12 @@ pub struct Session {
     /// サイドバーを開いていたか。
     #[serde(default = "default_true")]
     pub sidebar_visible: bool,
+    /// エクスプローラーで隠しファイルを表示していたか。
+    ///
+    /// 既定は非表示なので、`bool` の既定値 (`false`) をそのまま使ってよい。
+    /// `sidebar_visible` と違って専用の default 関数が要らない。
+    #[serde(default)]
+    pub explorer_show_hidden: bool,
 }
 
 fn default_true() -> bool {
@@ -44,6 +50,7 @@ impl Default for Session {
             sidebar_width: None,
             panel_height: None,
             sidebar_visible: true,
+            explorer_show_hidden: false,
         }
     }
 }
@@ -140,6 +147,11 @@ mod tests {
     }
 
     #[test]
+    fn 既定では隠しファイルを表示しない() {
+        assert!(!Session::default().explorer_show_hidden);
+    }
+
+    #[test]
     fn ファイル無しと空_json_で初期状態が一致する() {
         let from_empty: Session = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty, Session::default());
@@ -160,6 +172,7 @@ mod tests {
             sidebar_width: Some(300.0),
             panel_height: Some(200.0),
             sidebar_visible: false,
+            explorer_show_hidden: true,
         };
         let text = serde_json::to_string(&session).unwrap();
         assert_eq!(serde_json::from_str::<Session>(&text).unwrap(), session);
@@ -177,6 +190,7 @@ mod tests {
             sidebar_width: Some(321.0),
             panel_height: Some(210.0),
             sidebar_visible: false,
+            explorer_show_hidden: true,
         };
         session.try_save_to(&path).expect("保存できる場所のはず");
         assert!(path.exists(), "保存先が作られていない: {}", path.display());

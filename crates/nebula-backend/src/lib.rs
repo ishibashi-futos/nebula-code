@@ -9,6 +9,7 @@ pub mod codex;
 pub mod dispatch;
 pub mod fsops;
 pub mod git;
+pub mod git_watch;
 pub mod ipc;
 pub mod lsp;
 pub mod search;

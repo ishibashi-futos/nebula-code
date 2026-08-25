@@ -18,6 +18,7 @@ use crate::ui::{
     NewlinePolicy, TextInput, TextInputEvent, empty_state, ghost_button, h_flex, icon, icon_button,
     list_row, nebula_accent_line, panel_header, primary_button, v_flex,
 };
+use crate::views::git::{GitSection, code_for, status_char, status_color};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClipboardItem, Context, ElementId, Entity, EventEmitter, FocusHandle,
@@ -25,8 +26,8 @@ use gpui::{
     anchored, deferred, div, px, uniform_list,
 };
 use nebula_protocol::{
-    DirEntry, Event, FileChange, FileChangeKind, NotificationLevel, Request, Response,
-    WorkspaceInfo,
+    DirEntry, Event, FileChange, FileChangeKind, GitFileStatus, GitRepoStatus, NotificationLevel,
+    Request, Response, WorkspaceInfo,
 };
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -36,6 +37,9 @@ use std::path::{Path, PathBuf};
 pub enum ExplorerEvent {
     OpenFile(PathBuf),
     Notify(NotificationLevel, String),
+    /// 隠しファイルの表示設定が変わった。セッションへの保存はシェル側の責務なので、
+    /// このビュー自身は保存しない (`sidebar_visible` 等と同じ役割分担)。
+    HiddenToggled,
 }
 
 /// 行の高さ。`uniform_list` は先頭行を測って全行に適用するため、
@@ -76,13 +80,18 @@ fn sort_entries(mut entries: Vec<DirEntry>) -> Vec<DirEntry> {
 }
 
 /// 取得済みの階層と展開状態から、画面に出す行の並びを作る。
+///
+/// `show_hidden` が `false` のときは `.` で始まる項目 (`.git`・`.gitignore`・`.env` 等) を
+/// 丸ごと落とす。フォルダ自身を落とせばその中身を再帰的に辿る必要も無いので、
+/// 判定は `push_level` のループ先頭 1 箇所で足りる。
 fn flatten(
     root: &Path,
     children: &HashMap<PathBuf, Vec<DirEntry>>,
     expanded: &HashSet<PathBuf>,
+    show_hidden: bool,
 ) -> Vec<TreeRow> {
     let mut rows = Vec::new();
-    push_level(root, 0, children, expanded, &mut rows);
+    push_level(root, 0, children, expanded, show_hidden, &mut rows);
     rows
 }
 
@@ -91,12 +100,16 @@ fn push_level(
     depth: usize,
     children: &HashMap<PathBuf, Vec<DirEntry>>,
     expanded: &HashSet<PathBuf>,
+    show_hidden: bool,
     rows: &mut Vec<TreeRow>,
 ) {
     let Some(entries) = children.get(dir) else {
         return;
     };
     for entry in entries {
+        if !show_hidden && entry.name.starts_with('.') {
+            continue;
+        }
         rows.push(TreeRow {
             path: entry.path.clone(),
             name: entry.name.clone(),
@@ -107,7 +120,7 @@ fn push_level(
         });
         // 未取得のフォルダは展開済みでも子が無いので、そのまま何も足されない。
         if entry.is_dir && expanded.contains(&entry.path) {
-            push_level(&entry.path, depth + 1, children, expanded, rows);
+            push_level(&entry.path, depth + 1, children, expanded, show_hidden, rows);
         }
     }
 }
@@ -156,6 +169,31 @@ fn affected_dirs(changes: &[FileChange]) -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+/// 変更のあるファイルの祖先ディレクトリをすべて集める。
+///
+/// ロールアップ表示 (「配下に変更あり」) は未展開のフォルダでも効かせたいが、
+/// `render_row` のたびに `entries` 全件を舐めては行数 × 件数のコストがかかる。
+/// ここで 1 回だけ求めて `HashSet` にしておけば、行ごとの判定は O(1) の参照で済む。
+///
+/// `root` (ワークスペース直下) より上へは辿らない。ツリーに出ない祖先まで
+/// 集めても使い道が無いうえ、`git_root` がワークスペースの祖先にある場合に
+/// ファイルシステムの根まで際限なく遡らないための歯止めにもなる。
+fn changed_ancestor_dirs(root: &Path, paths: &[PathBuf]) -> HashSet<PathBuf> {
+    let mut set = HashSet::new();
+    for path in paths {
+        for ancestor in path.ancestors().skip(1) {
+            if ancestor == root || !ancestor.starts_with(root) {
+                break;
+            }
+            // 既に登録済みなら、そこから上はどのみち前回の探索で入っている。
+            if !set.insert(ancestor.to_path_buf()) {
+                break;
+            }
+        }
+    }
+    set
 }
 
 /// 入力された名前を検証する。問題があれば利用者に見せる文言を返す。
@@ -229,11 +267,22 @@ pub struct ExplorerView {
     /// フォルダ → その直下の項目 (取得済みのものだけ)。
     children: HashMap<PathBuf, Vec<DirEntry>>,
     expanded: HashSet<PathBuf>,
+    /// `.` で始まる項目を出すか。既定は非表示 — `.git`・`.gitignore`・`.env` のような
+    /// 運用上の付随物は初見では雑音になりやすいので、必要なときだけ明示的に開く形にする。
+    show_hidden: bool,
     /// 表示行。状態が変わったときだけ組み直す。
     rows: Vec<TreeRow>,
     selected: Option<PathBuf>,
     /// 読み取り要求が飛んでいるフォルダ。多重要求を防ぐ。
     loading: HashSet<PathBuf>,
+    /// 直近の git 状態を絶対パスで引けるようにした索引。ファイル行のバッジ用。
+    ///
+    /// `GitRepoStatus` そのものは保持しない。`entries` 以外の情報 (branch 等) を
+    /// このビューが使わないので、丸ごと持つと読まれないフィールドが残ってしまう。
+    git_by_path: HashMap<PathBuf, GitFileStatus>,
+    /// 配下に変更のあるディレクトリの絶対パス。未展開のフォルダでもロールアップの
+    /// 点を出すために使う。git 状態が変わるたびに [`changed_ancestor_dirs`] で作り直す。
+    changed_ancestors: HashSet<PathBuf>,
     menu: Option<ContextMenu>,
     editing: Option<Editing>,
     /// 一覧のスクロール位置。新規作成の入力欄を画面内へ送るために持つ。
@@ -255,9 +304,12 @@ impl ExplorerView {
             workspace: None,
             children: HashMap::new(),
             expanded: HashSet::new(),
+            show_hidden: false,
             rows: Vec::new(),
             selected: None,
             loading: HashSet::new(),
+            git_by_path: HashMap::new(),
+            changed_ancestors: HashSet::new(),
             menu: None,
             editing: None,
             scroll: gpui::UniformListScrollHandle::default(),
@@ -288,35 +340,109 @@ impl ExplorerView {
         self.menu = None;
         self.editing = None;
         self.pending_delete = None;
+        // 前のワークスペースの git 状態を引き継がない。`activate_workspace` は
+        // 既に開いているワークスペースへ切り替えるとき新しい `OpenWorkspace` 要求を
+        // 送らない (= バックエンドからの初回 `GitStatusChanged` が再発火しない) ので、
+        // 受け身の購読だけに頼ると前のリポジトリの状態が残ってしまう。
+        // `read_dir` を毎回呼び直すのと同じ理由で、ここでも自分から取りに行く。
+        self.apply_git_status(GitRepoStatus::default());
         self.read_dir(root, cx);
+        self.refresh_git_status(cx);
         cx.notify();
     }
 
     pub fn handle_event(&mut self, event: &Event, cx: &mut Context<Self>) {
-        let Event::FilesChanged { workspace, changes } = event else {
-            return;
-        };
-        // 別ワークスペースの通知も届くので、自分のものだけ拾う。
-        if self.workspace.as_ref().map(|w| w.id) != Some(*workspace) {
-            return;
-        }
-        for change in changes {
-            if change.kind == FileChangeKind::Removed {
-                self.purge_under(&change.path);
+        match event {
+            Event::FilesChanged { workspace, changes } => {
+                // 別ワークスペースの通知も届くので、自分のものだけ拾う。
+                if self.workspace.as_ref().map(|w| w.id) != Some(*workspace) {
+                    return;
+                }
+                for change in changes {
+                    if change.kind == FileChangeKind::Removed {
+                        self.purge_under(&change.path);
+                    }
+                }
+                for dir in affected_dirs(changes) {
+                    // 取得していない階層は展開されていないので読み直す必要がない。
+                    if self.children.contains_key(&dir) {
+                        self.read_dir(dir, cx);
+                    }
+                }
+                self.rebuild_rows();
+                cx.notify();
             }
-        }
-        for dir in affected_dirs(changes) {
-            // 取得していない階層は展開されていないので読み直す必要がない。
-            if self.children.contains_key(&dir) {
-                self.read_dir(dir, cx);
+            Event::GitStatusChanged { workspace, status } => {
+                if self.workspace.as_ref().map(|w| w.id) != Some(*workspace) {
+                    return;
+                }
+                self.apply_git_status(status.clone());
+                cx.notify();
             }
+            _ => {}
         }
-        self.rebuild_rows();
-        cx.notify();
     }
 
     fn root(&self) -> Option<PathBuf> {
         self.workspace.as_ref().map(|w| w.root.clone())
+    }
+
+    /// git リポジトリのルート。ワークスペースが管理下に無ければ `None`。
+    fn git_root(&self) -> Option<&PathBuf> {
+        self.workspace.as_ref()?.git_root.as_ref()
+    }
+
+    /// `GitFileStatus.path` (repo ルート相対) を絶対パスに直す。
+    /// `GitView::absolute` と同じ式 (`views/git.rs`)。
+    fn absolute(&self, path: &Path) -> PathBuf {
+        match self.git_root() {
+            Some(root) => root.join(path),
+            None => path.to_path_buf(),
+        }
+    }
+
+    /// 取得した git 状態を反映し、バッジ・ロールアップ用の索引を作り直す。
+    ///
+    /// `rows` 自体は git 状態に左右されないので組み直さない。ここで作るのは
+    /// 描画のたびに `entries` を舐め直さずに済む 2 つの索引だけ:
+    /// ファイルの絶対パス → 状態 (バッジ用) と、変更のある祖先ディレクトリの集合
+    /// (未展開のフォルダでも効く「配下に変更あり」用)。
+    fn apply_git_status(&mut self, status: GitRepoStatus) {
+        let mut by_path = HashMap::with_capacity(status.entries.len());
+        let mut absolute_paths = Vec::with_capacity(status.entries.len());
+        for entry in status.entries {
+            let absolute = self.absolute(&entry.path);
+            absolute_paths.push(absolute.clone());
+            by_path.insert(absolute, entry);
+        }
+        self.changed_ancestors = self
+            .root()
+            .map(|root| changed_ancestor_dirs(&root, &absolute_paths))
+            .unwrap_or_default();
+        self.git_by_path = by_path;
+    }
+
+    /// 隠しファイルを表示しているか。セッションへの書き出しに使う。
+    pub fn show_hidden(&self) -> bool {
+        self.show_hidden
+    }
+
+    /// セッション復元時に、保存されていた表示設定を反映する。
+    pub fn set_show_hidden(&mut self, show_hidden: bool, cx: &mut Context<Self>) {
+        if self.show_hidden == show_hidden {
+            return;
+        }
+        self.show_hidden = show_hidden;
+        self.rebuild_rows();
+        cx.notify();
+    }
+
+    /// ヘッダーのボタンから呼ぶ。切り替えの通知はシェル側でセッションに書き戻すために使う。
+    fn toggle_show_hidden(&mut self, cx: &mut Context<Self>) {
+        self.show_hidden = !self.show_hidden;
+        self.rebuild_rows();
+        cx.emit(ExplorerEvent::HiddenToggled);
+        cx.notify();
     }
 
     /// 表示行を組み直す。
@@ -325,7 +451,7 @@ impl ExplorerView {
             self.rows.clear();
             return;
         };
-        self.rows = flatten(&root, &self.children, &self.expanded);
+        self.rows = flatten(&root, &self.children, &self.expanded, self.show_hidden);
         if let Some(Editing {
             kind: EditKind::Create { parent, is_dir },
             ..
@@ -445,6 +571,41 @@ impl ExplorerView {
         for dir in dirs {
             self.read_dir(dir, cx);
         }
+    }
+
+    /// git 状態を取り直す。`GitView::refresh_status` と同じ理由・同じ形。
+    ///
+    /// `Event::GitStatusChanged` の受信だけに頼ると、`activate_workspace` が
+    /// 既に開いているワークスペースへ切り替えるとき (新しい `OpenWorkspace` 要求を
+    /// 送らないため初回イベントが再発火しない) 前のリポジトリの状態が残り続ける。
+    fn refresh_git_status(&mut self, cx: &mut Context<Self>) {
+        let (Some(client), Some(workspace)) = (
+            self.client.clone(),
+            self.workspace
+                .as_ref()
+                .filter(|w| w.git_root.is_some())
+                .map(|w| w.id),
+        ) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = client.request(Request::GitStatus { workspace }).await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(Response::GitStatus(status)) => {
+                        this.apply_git_status(status);
+                        cx.notify();
+                    }
+                    Ok(_) => {}
+                    Err(e) => cx.emit(ExplorerEvent::Notify(
+                        NotificationLevel::Warning,
+                        format!("git の状態を取得できません: {e}"),
+                    )),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // -- 行の操作 --
@@ -685,6 +846,12 @@ impl ExplorerView {
                                 cx.notify();
                             }),
                         ),
+                    )
+                    .child(
+                        icon_button("explorer-toggle-hidden", Icon::Eye, self.show_hidden, cx)
+                            .on_click(cx.listener(|this, _e, _window, cx| {
+                                this.toggle_show_hidden(cx);
+                            })),
                     ),
             )
             .into_any_element()
@@ -727,6 +894,13 @@ impl ExplorerView {
         let expanded = self.expanded.contains(&row.path);
         let path = row.path.clone();
         let is_dir = row.is_dir;
+        // ファイルなら自身の状態、フォルダなら配下に変更があるかを見る。
+        // `git_by_path` にはファイルしか入らないので、フォルダ行では自然に `None` になる。
+        let git_code = self
+            .git_by_path
+            .get(&row.path)
+            .map(|entry| code_for(entry, GitSection::Changed));
+        let show_rollup = is_dir && self.changed_ancestors.contains(&row.path);
 
         list_row(("explorer-row", index), selected, cx)
             .relative()
@@ -757,6 +931,26 @@ impl ExplorerView {
                     .overflow_hidden()
                     .child(SharedString::from(row.name.clone())),
             )
+            .child(div().flex_1())
+            .when_some(git_code, |el, code| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.5))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(status_color(code, &theme))
+                        .child(status_char(code).to_string()),
+                )
+            })
+            .when(show_rollup, |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(theme.git_modified),
+                )
+            })
             .on_click(cx.listener(move |this, _e, _window, cx| this.activate_row(index, cx)))
             .on_mouse_down(
                 MouseButton::Right,
@@ -1131,6 +1325,56 @@ mod tests {
         (root, children)
     }
 
+    /// ルート直下に隠しフォルダ (`.git`) と隠しファイル (`.gitignore`) を混ぜた木。
+    /// `.git` の中身も持たせ、非表示時に再帰まで止まっていることを確かめられるようにする。
+    fn sample_with_hidden() -> (PathBuf, HashMap<PathBuf, Vec<DirEntry>>) {
+        let root = PathBuf::from("/w");
+        let mut children = HashMap::new();
+        children.insert(
+            root.clone(),
+            sort_entries(vec![
+                entry("/w/README.md", false),
+                entry("/w/.git", true),
+                entry("/w/.gitignore", false),
+            ]),
+        );
+        children.insert(
+            PathBuf::from("/w/.git"),
+            sort_entries(vec![entry("/w/.git/HEAD", false)]),
+        );
+        (root, children)
+    }
+
+    #[test]
+    fn 隠しファイルを表示しない設定ではドット始まりの項目が除かれる() {
+        let (root, children) = sample_with_hidden();
+        let rows = flatten(&root, &children, &HashSet::new(), false);
+        let listed: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            listed,
+            vec!["README.md"],
+            ".git と .gitignore はどちらもドット始まりなので隠す"
+        );
+    }
+
+    #[test]
+    fn 隠しファイルを表示する設定では通常どおり全項目が出る() {
+        let (root, children) = sample_with_hidden();
+        let rows = flatten(&root, &children, &HashSet::new(), true);
+        let listed: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(listed, vec![".git", ".gitignore", "README.md"]);
+    }
+
+    #[test]
+    fn 隠しフォルダを非表示にすると展開していても中身ごと消える() {
+        let (root, children) = sample_with_hidden();
+        // .git を展開状態にしても、フォルダ自体が非表示ならその配下を辿る理由が無い。
+        let expanded: HashSet<PathBuf> = [PathBuf::from("/w/.git")].into_iter().collect();
+        let rows = flatten(&root, &children, &expanded, false);
+        assert_eq!(rows.len(), 1, "README.md 以外は行ごと現れない");
+        assert!(rows.iter().all(|r| r.name != "HEAD"));
+    }
+
     #[test]
     fn 並び順はフォルダが先で名前順() {
         let sorted = sort_entries(vec![
@@ -1146,7 +1390,7 @@ mod tests {
     #[test]
     fn 折り畳んだ状態ではルート直下だけが並ぶ() {
         let (root, children) = sample();
-        let rows = flatten(&root, &children, &HashSet::new());
+        let rows = flatten(&root, &children, &HashSet::new(), true);
         let listed: Vec<(&str, usize)> = rows.iter().map(|r| (r.name.as_str(), r.depth)).collect();
         assert_eq!(
             listed,
@@ -1159,7 +1403,7 @@ mod tests {
     fn 展開したフォルダの子が直後に一段深く入る() {
         let (root, children) = sample();
         let expanded: HashSet<PathBuf> = [PathBuf::from("/w/src")].into_iter().collect();
-        let rows = flatten(&root, &children, &expanded);
+        let rows = flatten(&root, &children, &expanded, true);
         let listed: Vec<(&str, usize)> = rows.iter().map(|r| (r.name.as_str(), r.depth)).collect();
         assert_eq!(
             listed,
@@ -1178,7 +1422,7 @@ mod tests {
         let (root, children) = sample();
         // docs は children に無い。
         let expanded: HashSet<PathBuf> = [PathBuf::from("/w/docs")].into_iter().collect();
-        let rows = flatten(&root, &children, &expanded);
+        let rows = flatten(&root, &children, &expanded, true);
         assert_eq!(rows.len(), 3);
     }
 
@@ -1186,7 +1430,7 @@ mod tests {
     fn 仮行はフォルダの直後に一段深く入る() {
         let (root, children) = sample();
         let expanded: HashSet<PathBuf> = [PathBuf::from("/w/src")].into_iter().collect();
-        let mut rows = flatten(&root, &children, &expanded);
+        let mut rows = flatten(&root, &children, &expanded, true);
         insert_draft_row(&mut rows, &root, Path::new("/w/src"), false);
         assert_eq!(rows[2].depth, 1);
         assert!(rows[2].is_draft);
@@ -1196,7 +1440,7 @@ mod tests {
     #[test]
     fn ルート直下の仮行は先頭に入る() {
         let (root, children) = sample();
-        let mut rows = flatten(&root, &children, &HashSet::new());
+        let mut rows = flatten(&root, &children, &HashSet::new(), true);
         insert_draft_row(&mut rows, &root, &root, true);
         assert!(rows[0].is_draft);
         assert_eq!(rows[0].depth, 0);
@@ -1226,6 +1470,59 @@ mod tests {
             affected_dirs(&changes),
             vec![PathBuf::from("/w/src"), PathBuf::from("/w/docs")]
         );
+    }
+
+    #[test]
+    fn ネストの深いパスは途中のフォルダすべてがロールアップ対象になる() {
+        let root = PathBuf::from("/w");
+        let paths = vec![PathBuf::from("/w/src/deep/nested/file.rs")];
+        let dirs = changed_ancestor_dirs(&root, &paths);
+        assert_eq!(
+            dirs,
+            [
+                PathBuf::from("/w/src"),
+                PathBuf::from("/w/src/deep"),
+                PathBuf::from("/w/src/deep/nested"),
+            ]
+            .into_iter()
+            .collect(),
+            "ワークスペース直下 (/w) は行として存在しないので含めない"
+        );
+    }
+
+    #[test]
+    fn リポジトリ直下のファイルはロールアップ対象を持たない() {
+        let root = PathBuf::from("/w");
+        let paths = vec![PathBuf::from("/w/README.md")];
+        assert!(
+            changed_ancestor_dirs(&root, &paths).is_empty(),
+            "唯一の親はルート自身で、ルートは行として描かないので対象は空になる"
+        );
+    }
+
+    #[test]
+    fn 同じフォルダの複数変更は一つのエントリにまとまる() {
+        let root = PathBuf::from("/w");
+        let paths = vec![
+            PathBuf::from("/w/src/a.rs"),
+            PathBuf::from("/w/src/b.rs"),
+        ];
+        let dirs = changed_ancestor_dirs(&root, &paths);
+        assert_eq!(dirs, [PathBuf::from("/w/src")].into_iter().collect());
+    }
+
+    #[test]
+    fn 変更が無ければロールアップ対象も無い() {
+        assert!(changed_ancestor_dirs(&PathBuf::from("/w"), &[]).is_empty());
+    }
+
+    #[test]
+    fn ワークスペース外の変更は対象に含めない() {
+        // git_root がワークスペースの祖先にあると、他のフォルダの変更も
+        // entries に混ざり得る。ツリーに出ないパスまで拾わないことを確かめる。
+        let root = PathBuf::from("/w/sub");
+        let paths = vec![PathBuf::from("/w/other/file.rs")];
+        assert!(changed_ancestor_dirs(&root, &paths).is_empty());
     }
 
     #[test]
