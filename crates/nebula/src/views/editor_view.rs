@@ -18,6 +18,7 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent,
     UTF16Selection, Window, div, px,
 };
+use nebula_core::markdown::{ListContinuation, list_continuation};
 use nebula_core::selection::{Direction, Movement, move_selection, normalize};
 use nebula_core::{RopeExt, Selection, TextBuffer};
 use nebula_protocol::{
@@ -663,6 +664,11 @@ impl EditorView {
         }
         // 改行時は前の行のインデントを引き継ぐ。引き継がないと毎行手で揃えることになる。
         let before = self.selections.clone();
+        // Markdown は箇条書き・チェックリスト・引用を改行時に継続する、文章向けの
+        // 別ルールを使う。他の言語のブロック開始インデント判定 (opens_block) を
+        // 混ぜると、地の文で行末が ':' のときに誤発火したり、リスト継続と二重に
+        // インデントが入ったりするので、Markdown のときは opens_block を使わない。
+        let is_markdown = self.config.language.as_deref() == Some("markdown");
         let rope = self.buffer.rope();
         let mut edits = Vec::new();
         for sel in &before {
@@ -672,6 +678,33 @@ impl EditorView {
                 .chars()
                 .take_while(|c| *c == ' ' || *c == '\t')
                 .collect();
+
+            if is_markdown {
+                match list_continuation(&line) {
+                    Some(ListContinuation::Continue(prefix)) => {
+                        edits.push(Edit::replace(sel.range(), format!("\n{prefix}")));
+                    }
+                    Some(ListContinuation::Terminate) if sel.is_empty() => {
+                        // マーカーだけで中身が空の行だったのでリストから抜ける。
+                        // 改行はせず、現在行のマーカーを消して空行にする。
+                        let line_range =
+                            TextRange::new(rope.line_to_char(row), rope.line_end_offset(row));
+                        edits.push(Edit::replace(line_range, String::new()));
+                    }
+                    Some(ListContinuation::Terminate) => {
+                        // 選択範囲がある Enter は行全体を消す特殊処理と噛み合わない
+                        // (選択が行をまたいでいると選択後半の文字が消えずに残ってしまう)。
+                        // キャレット単体のときだけ打ち切りにして、選択があるときは
+                        // 普通に選択を改行で置き換える。
+                        edits.push(Edit::replace(sel.range(), format!("\n{indent}")));
+                    }
+                    None => {
+                        edits.push(Edit::replace(sel.range(), format!("\n{indent}")));
+                    }
+                }
+                continue;
+            }
+
             // 開き括弧の直後ならもう 1 段深くする。
             let opens_block = line.trim_end().ends_with(['{', '(', '[', ':']);
             let extra = if opens_block {
@@ -1985,6 +2018,25 @@ mod tests {
         assert_eq!(
             map_selections_through(&before, &edits),
             vec![Selection::caret(3)]
+        );
+    }
+
+    #[test]
+    fn マーカー行だけを消す置換でカーソルが行頭に来る() {
+        // Markdown のリスト打ち切り (on_newline の Terminate 分岐) は、
+        // マーカー行全体を空文字に置換する。キャレットが行末 (マーカー直後) に
+        // あっても行内の途中にあっても、置換後は行頭に戻ってくる必要がある
+        // (でないと空になった行の外、次の行の文字の中にキャレットが迷い込む)。
+        let edits = vec![Edit::replace(TextRange::new(3, 9), "")];
+        assert_eq!(
+            map_selections_through(&[Selection::caret(9)], &edits),
+            vec![Selection::caret(3)],
+            "マーカー直後 (行末) のキャレット"
+        );
+        assert_eq!(
+            map_selections_through(&[Selection::caret(6)], &edits),
+            vec![Selection::caret(3)],
+            "マーカーの途中のキャレット"
         );
     }
 

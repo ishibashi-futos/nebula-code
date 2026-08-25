@@ -347,6 +347,12 @@ fn exact_token_kind(name: &str) -> Option<TokenKind> {
         "tag" | "tag.builtin" => Tag,
         "label" => Label,
         "string.regexp" | "regex" => Regex,
+        // Markdown の見出し (tree-sitter-md の highlights.scm が付ける名前)。
+        // 本文の "text" に落としてしまうと地の文と見分けが付かなくなる。
+        "text.title" | "title" => Heading,
+        // コードスパン・コードブロック。文字列と同じ「そのまま読む値」という
+        // 見た目にしておくと、地の文から視覚的に分離できる。
+        "text.literal" => String,
         "text" | "none" | "spell" => Text,
         _ => return None,
     })
@@ -397,6 +403,18 @@ mod tests {
             Some(TokenKind::Parameter)
         );
         assert_eq!(token_kind_for_capture("wholly.unknown"), None);
+    }
+
+    #[test]
+    fn markdownの見出しキャプチャがheadingに解決される() {
+        // tree-sitter-md の highlights.scm は見出しを "text.title" で捕捉する。
+        // ここが素の "text" に落ちると、見出しが地の文と同じ色になってしまう。
+        assert_eq!(token_kind_for_capture("text.title"), Some(TokenKind::Heading));
+    }
+
+    #[test]
+    fn markdownのコードスパンはstringに解決される() {
+        assert_eq!(token_kind_for_capture("text.literal"), Some(TokenKind::String));
     }
 
     #[test]

@@ -7,7 +7,7 @@
 * [ ] `nebura update` によるSelf Update機構の追加(reference: `bake update` https://github.com/ishibashi-futos/overbake)
 * [x] `.git`, `.gitignore` 等の隠しフォルダ非表示、再表示機能
 * [x] `JetBrains Mono` の組み込み・デフォルト化
-* [ ] Markdownファイル記述支援機構の追加（箇条書き、チェックリスト改行時自動作成、見出しのハイライトなど）
+* [x] Markdownファイル記述支援機構の追加（箇条書き、チェックリスト改行時自動作成、見出しのハイライトなど）
 * [ ] Markdownファイルプレビュー機能の追加
 * [x] gitの差分有無がエクスプローラーからも確認できて欲しい
 * [x] エディタで最終行にカーソルがある場合に、↓キーを押すと、最終行の末尾列までカーソルが移動して欲しい

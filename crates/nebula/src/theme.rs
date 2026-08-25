@@ -77,7 +77,7 @@ pub struct Theme {
     ansi: [Hsla; 16],
 }
 
-const TOKEN_KIND_COUNT: usize = 24;
+const TOKEN_KIND_COUNT: usize = 25;
 
 /// [`TokenKind`] を配列添字に写す。
 ///
@@ -110,6 +110,7 @@ fn token_index(token: TokenKind) -> usize {
         Label => 21,
         Regex => 22,
         Text => 23,
+        Heading => 24,
     }
 }
 
@@ -150,6 +151,10 @@ impl Theme {
             s[token_index(TokenKind::Label)] = coral;
             s[token_index(TokenKind::Regex)] = rgb(0xFFB86B).into();
             s[token_index(TokenKind::Text)] = rgb(0xE6EAFF).into();
+            // 見出しはテーマの主アクセント (シアン) をそのまま使う。太字と組み合わせて
+            // 本文から一段浮かせる。専用の色を新しく足すより、テーマの軸である
+            // シアン/マゼンタ/バイオレットの中で意味づけした方が一貫する。
+            s[token_index(TokenKind::Heading)] = cyan;
             s
         };
 
@@ -345,6 +350,7 @@ mod tests {
             TokenKind::Label,
             TokenKind::Regex,
             TokenKind::Text,
+            TokenKind::Heading,
         ];
         assert_eq!(kinds.len(), TOKEN_KIND_COUNT);
         let mut indices: Vec<usize> = kinds.iter().map(|k| token_index(*k)).collect();
@@ -354,6 +360,16 @@ mod tests {
         for kind in kinds {
             let _ = theme.syntax_color(kind);
         }
+    }
+
+    #[test]
+    fn 見出しの色は本文と異なる() {
+        // 色が本文 (Text) と同じだと、太字だけが頼りになり見出しが埋もれやすい。
+        let theme = Theme::cyber_cosmic();
+        assert_ne!(
+            theme.syntax_color(TokenKind::Heading),
+            theme.syntax_color(TokenKind::Text)
+        );
     }
 
     #[test]
