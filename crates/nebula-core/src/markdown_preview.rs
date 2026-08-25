@@ -2,8 +2,13 @@
 //!
 //! Markdown のソース文字列を、プレビューに描くべき要素の並び ([`PreviewBlock`]) へ
 //! 変換する。GPUI にも `TextBuffer`/`Rope` にも触れない純粋関数として作ってあるので、
-//! GUI を起動しなくても変換の正しさをテストできる。描画そのもの (div の組み立て) は
-//! 呼び出し側 (`crates/nebula/src/views/markdown_preview.rs`) の仕事で、ここでは扱わない。
+//! GUI を起動しなくても変換の正しさをテストできる。
+//!
+//! `PreviewBlock`/`ListMarker` そのものは IPC を跨ぐため `nebula-protocol` 側に
+//! 置かれている ([`HighlightSpan`](nebula_protocol::HighlightSpan) と同じ理由)。
+//! この関数を呼ぶのはバックエンド (`crates/nebula-backend/src/buffers.rs`) だけで、
+//! 結果は `Response::MarkdownPreview` として GUI へ渡る。描画そのもの (div の組み立て)
+//! は GUI 側 (`crates/nebula/src/views/markdown_preview.rs`) の仕事で、ここでは扱わない。
 //!
 //! パーサは自前で書かず、`language.rs` の markdown 言語定義が使っているのと同じ
 //! `tree-sitter-md` のブロック文法 (`tree_sitter_md::LANGUAGE`) をそのまま使う。
@@ -28,49 +33,8 @@
 //!   引用の外にあるのと同じように (深さ情報を持たずに) 変換される。
 //! - テーブル・HTML ブロック・リンク参照定義・YAML フロントマター。
 
+use nebula_protocol::{ListMarker, PreviewBlock};
 use tree_sitter::{Node, Parser};
-
-/// プレビューに描くべき要素 1 つ。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PreviewBlock {
-    /// 見出し。`level` は 1〜6 (ATX `#`〜`######`、Setext `===`/`---` はそれぞれ 1/2 に写す)。
-    Heading { level: u8, text: String },
-    /// 箇条書き・順序付きリスト・チェックリストの 1 項目。
-    ///
-    /// `depth` はネストの深さ (最も外側が 0)。ネストしたリストは項目の子として
-    /// 現れるので、そのぶん `depth` を 1 つずつ増やして辿る。
-    ListItem {
-        depth: u8,
-        marker: ListMarker,
-        text: String,
-    },
-    /// フェンス付きコードブロック。`language` は ```` ``` ```` の直後に書かれた
-    /// 情報文字列 (例: `rust`)。書かれていなければ `None`。
-    CodeBlock {
-        language: Option<String>,
-        code: String,
-    },
-    /// 引用の 1 段落。`depth` は `>` の入れ子の深さ (`>` 単体なら 1、`>>` なら 2)。
-    Quote { depth: u8, text: String },
-    /// 通常の段落。
-    Paragraph { text: String },
-    /// 水平線 (`---` / `***` / `___`)。
-    ThematicBreak,
-}
-
-/// リスト項目の行頭記号の種類。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ListMarker {
-    /// 順序無し箇条書き (`-` / `*` / `+`)。見た目の記号はプレビューでは区別しない。
-    Bullet,
-    /// 順序付き。実際にソースへ書かれていた番号をそのまま持つ
-    /// (5 から始まるリストなら `Ordered(5)`)。
-    Ordered(u64),
-    /// 未チェックのチェックリスト項目 (`- [ ] `)。
-    TaskUnchecked,
-    /// チェック済みのチェックリスト項目 (`- [x] `)。
-    TaskChecked,
-}
 
 /// Markdown のソース文字列を、プレビューに描くべき要素の並びへ変換する。
 ///

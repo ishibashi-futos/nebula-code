@@ -123,6 +123,11 @@ pub enum Request {
     BufferLanguageConfig {
         buffer: BufferId,
     },
+    /// Markdown プレビュー用の要素列を要求する。構文解析はバックエンドが行うので、
+    /// 内容は送らず `buffer` だけで指定する (バックエンドが正本を持っている)。
+    MarkdownPreview {
+        buffer: BufferId,
+    },
 
     // -- 検索 --
     /// ワークスペース全文検索を開始する。結果は [`Event::SearchMatches`] で流れる。
@@ -341,6 +346,12 @@ pub enum Response {
     },
     MatchingBracket(Option<usize>),
     LanguageConfig(LanguageConfig),
+    /// Markdown プレビュー用の要素列。
+    MarkdownPreview {
+        /// 応答が対応するバッファ版数。GUI は古い応答を捨てる。
+        version: u64,
+        blocks: Vec<PreviewBlock>,
+    },
 
     SearchStarted {
         search: SearchId,

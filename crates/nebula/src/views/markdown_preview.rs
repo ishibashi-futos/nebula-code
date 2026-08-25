@@ -4,58 +4,101 @@
 //! 独立したペインではない (ペイン分割の 2 枠上限には数えない)。そのため
 //! `views/editor.rs` の `Tab` ごとに 1 つ持たせ、タブが閉じられれば一緒に消える。
 //!
-//! Markdown → 描くべき要素の並びへの変換 (`nebula_core::markdown_preview::parse_preview`)
-//! は GPUI に依存しない純粋関数として `nebula-core` 側に切り出してあり、テストも
-//! そちらにある。ここでは、その結果を `div()` の並びへ描くだけに専念する。
-//! `editor_element.rs` が使っている低レベルな `Element`/`shape_line` 機構は使わない
-//! (あれは巨大バッファを高速に描くための仕組みで、プレビューの分量には不要)。
+//! Markdown → 描くべき要素の並びへの変換 (tree-sitter を使う `parse_preview`) は
+//! バックエンドで行う (`crates/nebula-backend/src/buffers.rs` の `markdown_preview`
+//! ハンドラ)。GUI プロセスでは tree-sitter を一切動かさない
+//! (`ARCHITECTURE.md` の「構文解析は GUI では走らせない」方針)。ここでは、
+//! 版数のズレを防ぎながらバックエンドへ要求を送ることと、結果を `div()` の並びへ
+//! 描くことに専念する。`editor_element.rs` が使っている低レベルな
+//! `Element`/`shape_line` 機構は使わない (あれは巨大バッファを高速に描くための
+//! 仕組みで、プレビューの分量には不要)。
 
+use crate::ipc_client::BackendClient;
 use crate::theme::{Theme, metrics, theme};
 use crate::ui::{empty_state, h_flex, v_flex};
 use crate::views::editor_view::EditorView;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, Entity, Render, Window, div, px};
-use nebula_core::markdown_preview::{ListMarker, PreviewBlock, parse_preview};
-use nebula_protocol::TokenKind;
+use nebula_protocol::{BufferId, ListMarker, PreviewBlock, Request, Response, TokenKind};
 
 pub struct MarkdownPreviewView {
     editor: Entity<EditorView>,
-    /// 直近に変換した結果。`buffer().version()` が変わらない限り再変換しない。
+    client: BackendClient,
+    buffer: BufferId,
+    /// 直近に表示したブロック列。まだ 1 度も応答を受け取っていなければ空。
     ///
+    /// 新しい要求を送った直後もこれは消さない。応答を待っている間、画面を
+    /// 空にして点滅させるより、古い内容でも出し続けたほうが違和感が小さい。
+    blocks: Vec<PreviewBlock>,
+    /// `blocks` が対応するバッファ版数 (バックエンドの応答が返す版数)。
+    /// まだ 1 度も応答を受け取っていなければ `None`。
+    ///
+    /// 応答が届くたびに [`should_adopt_preview`] でこれと比較し、より新しい
+    /// 版数の応答だけを採用する。バックエンドは要求ごとに別タスクで処理するため
+    /// 応答の順序は要求した順序と入れ替わりうる (詳しくは同関数のコメント)。
+    displayed_version: Option<u64>,
+    /// 直近に要求を送った時点の、エディタ側 (ローカル) の版数。
+    ///
+    /// これがエディタの現在の版数と一致している間は要求を送り直さない。
     /// このビューは埋め込まれている限り、タブのフォーカス移動やカーソル点滅など
-    /// 編集と無関係な再描画でも `render` が呼ばれうる。そのたびに tree-sitter で
-    /// 構文解析し直すのは無駄なので、版数が同じ間はキャッシュを使い回す。
-    cache: Option<(u64, Vec<PreviewBlock>)>,
+    /// 編集と無関係な再描画でも `render` が呼ばれうるため、このガードが無いと
+    /// 同じ版数へ毎フレーム要求を送ってしまう。
+    requested_version: Option<u64>,
 }
 
 impl MarkdownPreviewView {
-    pub fn new(editor: Entity<EditorView>) -> Self {
-        Self { editor, cache: None }
+    pub fn new(editor: Entity<EditorView>, client: BackendClient, buffer: BufferId) -> Self {
+        Self {
+            editor,
+            client,
+            buffer,
+            blocks: Vec::new(),
+            displayed_version: None,
+            requested_version: None,
+        }
     }
 
-    /// 現在のバッファ内容を変換した結果を返す。必要なときだけ再変換する。
-    fn blocks<'a>(&'a mut self, cx: &mut Context<Self>) -> &'a [PreviewBlock] {
-        let version = self.editor.read(cx).buffer().version();
-        let stale = !matches!(&self.cache, Some((cached, _)) if *cached == version);
-        if stale {
-            let text = self.editor.read(cx).buffer().text();
-            self.cache = Some((version, parse_preview(&text)));
+    /// エディタが要求後に編集されていれば、バックエンドへ最新内容のプレビューを
+    /// 要求する。応答は非同期に届くので、ここでは要求を送るだけで `blocks` は
+    /// 変えない (差し替えは応答が届いたときだけ)。
+    fn request_if_stale(&mut self, cx: &mut Context<Self>) {
+        let local_version = self.editor.read(cx).buffer().version();
+        if self.requested_version == Some(local_version) {
+            return;
         }
-        &self.cache.as_ref().expect("直前に必ず設定している").1
+        self.requested_version = Some(local_version);
+
+        let client = self.client.clone();
+        let buffer = self.buffer;
+        cx.spawn(async move |this, cx| {
+            let result = client.request(Request::MarkdownPreview { buffer }).await;
+            this.update(cx, |this, cx| {
+                if let Ok(Response::MarkdownPreview { version, blocks }) = result
+                    && should_adopt_preview(this.displayed_version, version)
+                {
+                    this.displayed_version = Some(version);
+                    this.blocks = blocks;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 }
 
 impl Render for MarkdownPreviewView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = theme(cx).clone();
-        let blocks = self.blocks(cx);
+        // 表示中 (= render が呼ばれている) かつ版数が変わっていれば要求する。
+        self.request_if_stale(cx);
 
-        let body: AnyElement = if blocks.is_empty() {
+        let theme = theme(cx).clone();
+        let body: AnyElement = if self.blocks.is_empty() {
             empty_state("プレビューする内容がありません", cx).into_any_element()
         } else {
             v_flex()
                 .gap(px(10.))
-                .children(blocks.iter().map(|block| render_block(block, &theme)))
+                .children(self.blocks.iter().map(|block| render_block(block, &theme)))
                 .into_any_element()
         };
 
@@ -67,6 +110,23 @@ impl Render for MarkdownPreviewView {
             .bg(theme.bg_elevated)
             .p(px(16.))
             .child(body)
+    }
+}
+
+/// 応答の版数が、現在表示している版数より新しければ採用してよいかを判定する。
+///
+/// バックエンドは要求ごとに別の非同期タスクで処理する
+/// (`crates/nebula-backend/src/ipc.rs` の `handle_client_message` が要求のたびに
+/// `tokio::spawn` する)。そのため応答は要求した順序どおりに届くとは限らない:
+/// 新しい版数を要求した直後の応答が、それより前に投げていた古い版数への応答より
+/// 先に届くことが実際にありうる。この関数は、表示中の内容をその古い応答で
+/// 上書きしないためのガードを純粋関数として切り出したもの。
+///
+/// `displayed` が `None` (まだ 1 度も応答を受け取っていない) なら常に採用する。
+fn should_adopt_preview(displayed: Option<u64>, incoming: u64) -> bool {
+    match displayed {
+        None => true,
+        Some(displayed) => incoming > displayed,
     }
 }
 
@@ -190,4 +250,33 @@ fn render_quote(depth: u8, text: &str, theme: &Theme) -> AnyElement {
         .italic()
         .child(text.to_string())
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_adopt_preview;
+
+    #[test]
+    fn 新しい版数の応答は採用する() {
+        assert!(should_adopt_preview(Some(3), 4));
+    }
+
+    #[test]
+    fn 同じ版数の応答は採用しない() {
+        // 同じ版数を採用しても表示内容は変わらないはずなので、無駄な差し替えを
+        // 避ける側 (採用しない) に倒しておく。
+        assert!(!should_adopt_preview(Some(3), 3));
+    }
+
+    #[test]
+    fn 古い版数の応答は捨てる() {
+        // 新しい版数 (5) を表示した後、それより前に投げていた要求の応答 (3) が
+        // 遅れて届いた状況を想定する。表示中の内容を古い方で上書きしてはいけない。
+        assert!(!should_adopt_preview(Some(5), 3));
+    }
+
+    #[test]
+    fn まだ何も表示していなければ最初の応答を採用する() {
+        assert!(should_adopt_preview(None, 0));
+    }
 }

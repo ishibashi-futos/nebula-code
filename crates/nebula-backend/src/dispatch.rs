@@ -80,6 +80,7 @@ pub async fn handle(
         } => buffers::highlights(state, buffer, start_row, end_row),
         MatchingBracket { buffer, offset } => buffers::matching_bracket(state, buffer, offset),
         BufferLanguageConfig { buffer } => buffers::language_config(state, buffer),
+        MarkdownPreview { buffer } => buffers::markdown_preview(state, buffer),
 
         // -- 検索 --
         StartSearch { workspace: id, query } => {

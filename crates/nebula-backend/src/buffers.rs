@@ -239,6 +239,24 @@ pub fn language_config(
     })
 }
 
+/// Markdown プレビュー用の要素列を組み立てる。
+///
+/// tree-sitter による構文解析は `highlights` と同じくここ (バックエンド) で行う。
+/// GUI 側で `buffer().text()` の生成や tree-sitter を動かすと描画スレッドを塞ぐため、
+/// 結果の `PreviewBlock` 列だけを IPC で渡す。
+pub fn markdown_preview(
+    state: &Arc<BackendState>,
+    buffer: BufferId,
+) -> Result<Response, ProtocolError> {
+    state.with_buffer(buffer, |entry| {
+        let blocks = nebula_core::markdown_preview::parse_preview(&entry.buffer.text());
+        Ok(Response::MarkdownPreview {
+            version: entry.buffer.version(),
+            blocks,
+        })
+    })
+}
+
 /// 外部でファイルが変更されたときにバッファへ反映する。
 ///
 /// 未編集のバッファだけ差し替える。編集中のものを勝手に上書きすると作業が消えるため、

@@ -16,7 +16,7 @@ pub use buffer::{BytePoint, EditRecord, TextBuffer};
 pub use error::{CoreError, Result};
 pub use language::{Language, LanguageRegistry};
 pub use markdown::{ListContinuation, list_continuation};
-pub use markdown_preview::{ListMarker, PreviewBlock, parse_preview};
+pub use markdown_preview::parse_preview;
 pub use rope_ext::{RopeExt, matching_bracket};
 pub use selection::{Direction, Movement, Selection, move_selection, normalize};
 pub use syntax::SyntaxTree;
