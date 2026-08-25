@@ -4,7 +4,7 @@
 * [x] ワークスペースの追加ボタンを押してもワークスペースが追加できない
 * [ ] UI上の各種ボタンにTooltipを追加する
 * [x] ターミナル上のコピー・ペースト機能を追加（右クリックでコンテキストメニュー表示なども）
-* [ ] `nebura update` によるSelf Update機構の追加(reference: `bake update` https://github.com/ishibashi-futos/overbake)
+* [x] `nebura update` によるSelf Update機構の追加(reference: `bake update` https://github.com/ishibashi-futos/overbake)
 * [x] `.git`, `.gitignore` 等の隠しフォルダ非表示、再表示機能
 * [x] `JetBrains Mono` の組み込み・デフォルト化
 * [x] Markdownファイル記述支援機構の追加（箇条書き、チェックリスト改行時自動作成、見出しのハイライトなど）

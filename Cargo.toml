@@ -12,7 +12,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-repository = "https://github.com/ishibashi-futos/nebula"
+repository = "https://github.com/ishibashi-futos/nebula-code"
 
 [workspace.dependencies]
 nebula-protocol = { path = "crates/nebula-protocol" }
