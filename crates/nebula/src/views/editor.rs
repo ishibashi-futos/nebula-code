@@ -4,7 +4,7 @@ use crate::actions;
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{metrics, theme};
-use crate::ui::{empty_state, h_flex, icon, v_flex};
+use crate::ui::{empty_state, h_flex, v_flex};
 use crate::views::editor_view::{EditorView, EditorViewEvent};
 use gpui::prelude::*;
 use gpui::{Context, Entity, EventEmitter, Subscription, Window, div, px};
@@ -42,6 +42,27 @@ struct Pane {
 impl Pane {
     fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
+    }
+}
+
+/// 並び (タブの列、ペインの列など) から要素を1つ取り除いたあと、
+/// 選択位置がどこを指すべきかを計算する。
+///
+/// タブを閉じても「見ていたはずのもの」がなるべく変わらないようにしたい:
+/// 閉じた位置より手前の選択はそのまま、閉じた位置より後ろの選択は
+/// 要素がひとつ詰まった分だけ手前にずれる。選択していた要素自体を閉じた場合は
+/// 同じ位置（詰まった結果、右隣だったものが来る）に留まり、それが末尾を超えるなら
+/// 新しい末尾に留まる。並びが空になった場合は 0 を返す（呼び出し側で空扱いする）。
+fn index_after_removal(removed: usize, old_selected: usize, new_len: usize) -> usize {
+    if new_len == 0 {
+        return 0;
+    }
+    if removed < old_selected {
+        old_selected - 1
+    } else if removed > old_selected {
+        old_selected
+    } else {
+        removed.min(new_len - 1)
     }
 }
 
@@ -257,24 +278,30 @@ impl EditorArea {
         view.update(cx, |view, cx| view.save(cx));
     }
 
+    /// アクティブなタブを閉じる。コマンドパレット・ショートカットからはここに来る。
     fn close_active(&mut self, cx: &mut Context<Self>) {
         let pane_index = self.active_pane;
-        let Some(tab) = self.panes[pane_index]
-            .tabs
-            .get(self.panes[pane_index].active)
-        else {
+        let index = self.panes[pane_index].active;
+        self.close_tab(pane_index, index, cx);
+    }
+
+    /// 指定した位置のタブを閉じる。タブの ✖ ボタンは自分がアクティブでなくても
+    /// 押せるため、「今アクティブなタブ」ではなく pane_index/index を明示的に受け取る。
+    fn close_tab(&mut self, pane_index: usize, index: usize, cx: &mut Context<Self>) {
+        let Some(tab) = self.panes[pane_index].tabs.get(index) else {
             return;
         };
         let buffer_id = tab.buffer_id;
-        let index = self.panes[pane_index].active;
+        let old_active = self.panes[pane_index].active;
         self.panes[pane_index].tabs.remove(index);
         let len = self.panes[pane_index].tabs.len();
-        self.panes[pane_index].active = index.min(len.saturating_sub(1));
+        self.panes[pane_index].active = index_after_removal(index, old_active, len);
 
         // 分割していて空になったペインは畳む。空の枠が残ると場所を無駄にする。
         if len == 0 && self.panes.len() > 1 {
+            let old_active_pane = self.active_pane;
             self.panes.remove(pane_index);
-            self.active_pane = self.active_pane.min(self.panes.len() - 1);
+            self.active_pane = index_after_removal(pane_index, old_active_pane, self.panes.len());
         }
 
         if let Some(client) = self.client.clone() {
@@ -412,15 +439,33 @@ impl EditorArea {
                             .hover(|s| s.bg(theme.bg_overlay).text_color(theme.text_muted))
                     })
                     .child(title)
-                    .child(if dirty {
-                        div()
-                            .size(px(7.))
-                            .rounded_full()
-                            .bg(theme.accent_secondary)
-                            .into_any_element()
-                    } else {
-                        icon(Icon::Close, px(11.), theme.text_faint).into_any_element()
+                    // 未保存マークは装飾として残す。閉じるボタンとは別物なので、
+                    // これがあっても ✖ は常に押せる（未保存タブも ✖ から閉じられる）。
+                    .when(dirty, |el| {
+                        el.child(
+                            div()
+                                .size(px(7.))
+                                .rounded_full()
+                                .bg(theme.accent_secondary),
+                        )
                     })
+                    .child(
+                        crate::ui::icon_button(
+                            ("tab-close", pane_index * 1000 + index),
+                            Icon::Close,
+                            false,
+                            cx,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            // ✖ 自体の click_listener はタブ本体の on_click と別の
+                            // hitbox で独立して発火し、放っておくと親（タブ本体）の
+                            // on_click にもバブリングして active を上書きしてしまう
+                            // （削除でずれた古い index が入り、タブ数と active が
+                            // 不整合になる）ので、必ず先に伝播を止める。
+                            cx.stop_propagation();
+                            this.close_tab(pane_index, index, cx);
+                        })),
+                    )
                     .on_click(cx.listener(move |this, _, _w, cx| {
                         this.active_pane = pane_index;
                         this.panes[pane_index].active = index;
@@ -489,5 +534,54 @@ impl Render for EditorArea {
             .on_action(cx.listener(Self::on_new_file))
             .on_action(cx.listener(Self::on_save_as))
             .children(panes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::index_after_removal;
+
+    #[test]
+    fn 三枚のうち真ん中を閉じたときアクティブが先頭にあれば動かない() {
+        // [0,1,2] の 1 を閉じる。アクティブは 0（閉じた位置より前）。
+        assert_eq!(index_after_removal(1, 0, 2), 0);
+    }
+
+    #[test]
+    fn 三枚のうち真ん中を閉じたときアクティブがそこだったら詰まった右隣に移る() {
+        // [0,1,2] の 1 を閉じる。アクティブも 1（閉じたタブ自身）。
+        // 削除後は元の 2 が位置 1 に詰まってくるので、そこがアクティブになる。
+        assert_eq!(index_after_removal(1, 1, 2), 1);
+    }
+
+    #[test]
+    fn 三枚のうち真ん中を閉じたときアクティブが後ろにあれば1つ前にずれる() {
+        // [0,1,2] の 1 を閉じる。アクティブは 2（閉じた位置より後ろ）。
+        assert_eq!(index_after_removal(1, 2, 2), 1);
+    }
+
+    #[test]
+    fn アクティブなタブ自身を閉じたとき末尾なら新しい末尾に留まる() {
+        // [0,1,2] の 2（末尾）を閉じる。アクティブも 2。
+        // 詰めた結果の末尾は 1 なので、そこにクランプされる。
+        assert_eq!(index_after_removal(2, 2, 2), 1);
+    }
+
+    #[test]
+    fn 最後の1枚を閉じたときは空扱いで0になる() {
+        // [0] の 0 を閉じる。アクティブも 0。要素が無くなるので 0（呼び出し側が空を判断する）。
+        assert_eq!(index_after_removal(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn アクティブより後ろのタブを閉じたときアクティブは動かない() {
+        // [0,1,2,3] の 3（末尾）を閉じる。アクティブは 1（閉じた位置より前）。
+        assert_eq!(index_after_removal(3, 1, 3), 1);
+    }
+
+    #[test]
+    fn アクティブより前のタブを閉じたときアクティブは1つ減る() {
+        // [0,1,2,3] の 0（先頭）を閉じる。アクティブは 2（閉じた位置より後ろ）。
+        assert_eq!(index_after_removal(0, 2, 3), 1);
     }
 }
