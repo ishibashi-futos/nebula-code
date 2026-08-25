@@ -12,7 +12,8 @@ use crate::ipc_client::BackendClient;
 use crate::theme::{Theme, theme};
 use crate::ui::{
     TextInput, TextInputEvent, empty_state, h_flex, icon, icon_button, list_row,
-    nebula_accent_line, panel_header, primary_button, truncate_middle, v_flex,
+    nebula_accent_line, panel_header, primary_button, simple_tooltip, tooltip_text,
+    truncate_middle, v_flex,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -792,7 +793,8 @@ impl GitView {
                         )
                     })
                     .child(icon(Icon::ChevronDown, px(10.), theme.text_faint))
-                    .on_click(cx.listener(|this, _, _w, cx| this.toggle_branch_menu(cx))),
+                    .on_click(cx.listener(|this, _, _w, cx| this.toggle_branch_menu(cx)))
+                    .tooltip(simple_tooltip(tooltip_text::GIT_SWITCH_BRANCH)),
             )
             .child(match busy {
                 Some(busy) => h_flex()
@@ -810,11 +812,13 @@ impl GitView {
                     .gap(px(2.))
                     .child(
                         icon_button("git-pull", Icon::Refresh, false, cx)
-                            .on_click(cx.listener(|this, _, _w, cx| this.sync(false, cx))),
+                            .on_click(cx.listener(|this, _, _w, cx| this.sync(false, cx)))
+                            .tooltip(simple_tooltip(tooltip_text::GIT_PULL)),
                     )
                     .child(
                         icon_button("git-push", Icon::Send, false, cx)
-                            .on_click(cx.listener(|this, _, _w, cx| this.sync(true, cx))),
+                            .on_click(cx.listener(|this, _, _w, cx| this.sync(true, cx)))
+                            .tooltip(simple_tooltip(tooltip_text::GIT_PUSH)),
                     )
                     .into_any_element(),
             })
@@ -1097,7 +1101,8 @@ impl GitView {
                     cx.stop_propagation();
                     this.discard = Some((target.clone(), name.clone()));
                     cx.notify();
-                })),
+                }))
+                .tooltip(simple_tooltip(tooltip_text::GIT_DISCARD)),
             );
         }
         row = match section {
@@ -1113,7 +1118,8 @@ impl GitView {
                     .on_click(cx.listener(move |this, _, _w, cx| {
                         cx.stop_propagation();
                         this.unstage(vec![target.clone()], cx);
-                    })),
+                    }))
+                    .tooltip(simple_tooltip(tooltip_text::GIT_UNSTAGE)),
                 )
             }
             _ => {
@@ -1123,7 +1129,8 @@ impl GitView {
                         .on_click(cx.listener(move |this, _, _w, cx| {
                             cx.stop_propagation();
                             this.stage(vec![target.clone()], cx);
-                        })),
+                        }))
+                        .tooltip(simple_tooltip(tooltip_text::GIT_STAGE)),
                 )
             }
         };
