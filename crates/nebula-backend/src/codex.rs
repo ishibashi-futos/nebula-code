@@ -12,9 +12,10 @@
 mod protocol;
 mod translate;
 
+use crate::tools::SharedTools;
 use nebula_protocol::{
     CodexApprovalDecision, CodexConversationId, CodexEvent, CodexSessionSpec, CodexTokenUsage,
-    DetectedTools, Event, ProtocolError,
+    Event, ProtocolError,
 };
 use protocol::Incoming;
 use serde_json::{Value, json};
@@ -34,14 +35,16 @@ use tokio::sync::{Mutex as AsyncMutex, broadcast, oneshot};
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct CodexService {
-    tools: DetectedTools,
+    /// 検出したツール。`BackendState`・`LspService` と共有する同じ実体。
+    /// 検出はバックエンド起動後に非同期で終わるため、構築時点では空のことがある。
+    tools: SharedTools,
     /// app-server は最初に使われたときに起動する。二重起動を防ぐため非同期ロックで包む。
     client: AsyncMutex<Option<Arc<Client>>>,
     shared: Arc<Shared>,
 }
 
 impl CodexService {
-    pub fn new(events: broadcast::Sender<Event>, tools: DetectedTools) -> Self {
+    pub fn new(events: broadcast::Sender<Event>, tools: SharedTools) -> Self {
         Self {
             tools,
             client: AsyncMutex::new(None),
@@ -210,7 +213,9 @@ impl CodexService {
     /// プロセスが落ちていた場合は次の要求で起動し直す。GUI から見ると
     /// 「Codex ビューをもう一度使えば復帰する」挙動になる。
     async fn ensure_client(&self) -> Result<Arc<Client>, ProtocolError> {
-        if self.tools.codex.is_none() {
+        // ロックは条件式の評価だけに使い、ガードを変数へ束縛しない。
+        // 束縛すると次の `.await` を跨いでしまい、Send でなくなる。
+        if self.tools.read().expect("検出結果のロック").codex.is_none() {
             return Err(ProtocolError::unsupported(
                 "codex コマンドが見つかりません。Codex 連携は使えません",
             ));
@@ -609,15 +614,19 @@ async fn handle_server_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 検出結果を共有可変にした `SharedTools` を組み立てるのに使う。本体側では
+    // `SharedTools` (型エイリアス) だけを扱うので、テストでのみ必要になる。
+    use nebula_protocol::DetectedTools;
+    use std::sync::RwLock;
 
     fn service(codex: Option<&str>) -> CodexService {
         let (events, _rx) = broadcast::channel(64);
         CodexService::new(
             events,
-            DetectedTools {
+            Arc::new(RwLock::new(DetectedTools {
                 codex: codex.map(str::to_string),
                 ..DetectedTools::default()
-            },
+            })),
         )
     }
 
@@ -863,10 +872,10 @@ mod tests {
         let (events, mut rx) = broadcast::channel(1024);
         let service = CodexService::new(
             events,
-            DetectedTools {
+            Arc::new(RwLock::new(DetectedTools {
                 codex: Some("test".to_string()),
                 ..DetectedTools::default()
-            },
+            })),
         );
         let conversation = service
             .new_conversation(CodexSessionSpec {

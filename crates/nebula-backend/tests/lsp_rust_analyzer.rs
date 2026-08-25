@@ -13,6 +13,7 @@
 use nebula_backend::lsp::LspService;
 use nebula_protocol::{DetectedTools, Event, LspServerState, Position};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
@@ -48,7 +49,7 @@ async fn rust_analyzer_のホバーが返る() {
     let position = locate(&text, "Rope::from_str");
 
     let (events, mut received) = broadcast::channel(4096);
-    let service = LspService::new(events, DetectedTools::default());
+    let service = LspService::new(events, Arc::new(RwLock::new(DetectedTools::default())));
 
     service
         .ensure_server(&root, "rust")

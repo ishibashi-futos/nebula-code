@@ -40,6 +40,7 @@ pub fn trace_startup() -> bool {
 }
 
 fn main() {
+    reset_signal_state();
     let started = Instant::now();
     let _ = STARTED.set(started);
     let initial_folder = parse_folder_arg();
@@ -82,6 +83,27 @@ fn main() {
                 );
             }
         });
+}
+
+/// 子プロセス (バックエンド) を確実に回収できるよう、シグナルの状態を既定へ戻す。
+///
+/// シグナルマスクと「無視 (SIG_IGN)」設定は `exec` を越えて子へ引き継がれる。この
+/// プロセス自身がどんな状態で起動されたかに関わらず、`nebula-backend` を spawn する
+/// 前に一度戻しておけば、子の回収 (`Child::wait()`) や将来シグナルハンドラ経由の
+/// 回収を足す場合にも影響されない。バックエンド側にも同名の関数
+/// (`nebula-backend/src/main.rs`) があるが、GUI は nebula-protocol と
+/// nebula-core にしか依存しておらず import できないため、ここに複製している。
+fn reset_signal_state() {
+    // SAFETY: 他のスレッドを作る前の main 先頭でのみ呼ぶ。ここで設定したマスクは
+    // 以降に作られる全スレッドへ引き継がれる。
+    unsafe {
+        let mut empty = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        if libc::sigemptyset(empty.as_mut_ptr()) == 0 {
+            libc::pthread_sigmask(libc::SIG_SETMASK, empty.as_ptr(), std::ptr::null_mut());
+        }
+        libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+    }
 }
 
 /// 引数で渡されたフォルダ。無ければカレントディレクトリを開かない (空の状態で起動する)。

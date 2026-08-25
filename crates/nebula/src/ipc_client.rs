@@ -6,8 +6,8 @@
 //! `client.request(...).await` と書くだけで済む。
 
 use nebula_protocol::{
-    ClientMessage, Event, FrameDecoder, PROTOCOL_VERSION, ProtocolError, Request, RequestId,
-    Response, ServerMessage, encode_frame,
+    ClientMessage, Event, ExecutableIdentity, FrameDecoder, PROTOCOL_VERSION, ProtocolError,
+    Request, RequestId, Response, ServerMessage, encode_frame,
 };
 use smol::channel::{Receiver, Sender, bounded, unbounded};
 use std::collections::HashMap;
@@ -34,6 +34,28 @@ impl BackendClient {
     /// ブロッキングする。呼び出し側はバックグラウンドスレッドから呼ぶこと。
     pub fn connect_blocking() -> Result<Self, ProtocolError> {
         let socket_path = nebula_protocol::default_socket_path();
+        let stream = connect_or_spawn(&socket_path)?;
+        let client = Self::from_stream(stream)?;
+
+        // 接続できただけでは「正しいバックエンドか」は分からない。相乗り先が
+        // 古いビルドの生き残りだと、直したはずのバグが再発することになる
+        // (「古いバックエンドプロセスが生き残っていると、新しい GUI がそちらに
+        // 相乗りして古いコードで動き続ける」)。ハンドシェイクで報告される
+        // 実行ファイルの同一性を、自分がこれから起動するはずのものと突き合わせる。
+        let handshake = smol::block_on(client.handshake())?;
+        let expected = ExecutableIdentity::from_path(&backend_binary_path()).map_err(|e| {
+            ProtocolError::io(format!("自分の実行ファイルの情報を読めません: {e}"))
+        })?;
+        if is_same_executable(&expected, &handshake.executable) {
+            return Ok(client);
+        }
+
+        eprintln!(
+            "nebula: 実行ファイルが一致しない古いバックエンド (pid {}) を終了させて起動し直します",
+            handshake.pid
+        );
+        replace_backend(&client, handshake.pid, &socket_path);
+
         let stream = connect_or_spawn(&socket_path)?;
         Self::from_stream(stream)
     }
@@ -182,7 +204,7 @@ fn connect_or_spawn(socket_path: &Path) -> Result<UnixStream, ProtocolError> {
         return Ok(stream);
     }
     let binary = backend_binary_path();
-    std::process::Command::new(&binary)
+    let child = std::process::Command::new(&binary)
         .arg("--socket")
         .arg(socket_path)
         .stdin(std::process::Stdio::null())
@@ -193,6 +215,7 @@ fn connect_or_spawn(socket_path: &Path) -> Result<UnixStream, ProtocolError> {
                 binary.display()
             ))
         })?;
+    spawn_reaper(child);
 
     // 起動待ち。合計で約 5 秒。
     let mut delay = std::time::Duration::from_millis(2);
@@ -215,4 +238,134 @@ fn backend_binary_path() -> PathBuf {
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("nebula-backend")))
         .unwrap_or_else(|| PathBuf::from("nebula-backend"))
+}
+
+/// 起動した子プロセス (バックエンド) を回収する。
+///
+/// `Child` を保持せず drop すると、終了時に GUI プロセスの下へ zombie として
+/// 残ってしまう (`Child` の drop は kill も wait もしない、というドキュメント
+/// どおりの挙動)。`wait()` は同期的な `waitpid` を呼ぶので、GUI プロセス自身の
+/// SIGCHLD マスク・ハンドラの状態に関係なく回収できる。
+fn spawn_reaper(mut child: std::process::Child) {
+    std::thread::Builder::new()
+        .name("nebula-backend-reaper".into())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .expect("バックエンド回収スレッドを起動できません");
+}
+
+/// 期待する実行ファイルと、バックエンドが報告した実行ファイルが同じビルドかを
+/// 判定する純粋関数。
+///
+/// 「新しい方が勝つ」のような判断はしない。厳密な一致/不一致だけを見る。cargo は
+/// 実際に変更があったときだけ実行ファイルを書き直すので、(path, mtime, size) が
+/// 一致していればそのまま使ってよい、が正しい信号になる。
+fn is_same_executable(expected: &ExecutableIdentity, actual: &ExecutableIdentity) -> bool {
+    expected.path == actual.path && expected.mtime == actual.mtime && expected.size == actual.size
+}
+
+/// 実行ファイルが一致しない古いバックエンドを終わらせる。
+///
+/// `Request::Shutdown` の正常経路 (バックエンド側で各サービスの後始末をしてから
+/// ソケットファイルを消す) を優先する。それでも一定時間でソケットファイルが
+/// 消えない場合に限り、最終手段として SIGTERM を送る。
+fn replace_backend(client: &BackendClient, pid: u32, socket_path: &Path) {
+    // `request()` で応答を待つと、応答を返せないくらい壊れている相手には
+    // この呼び出し自体が無期限にハングしてしまい、そのために用意した
+    // 「一定時間で見切って SIGTERM」という最終手段へ辿り着けなくなる。
+    // 送るだけ送って応答は待たず、後続のポーリングとタイムアウトに判断を委ねる。
+    let id = RequestId::next();
+    let _ = client.outgoing.try_send(ClientMessage::Request {
+        id,
+        request: Request::Shutdown,
+    });
+
+    if wait_for_socket_gone(socket_path, std::time::Duration::from_secs(2)) {
+        return;
+    }
+
+    eprintln!("nebula: Shutdown に応答しないため SIGTERM で終了させます (pid {pid})");
+    // SAFETY: pid はハンドシェイクで得た実在のプロセス ID。SIGTERM は対象プロセスに
+    // 既定の終了処理を促すだけで、こちらのメモリには一切触れない。
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+    // ソケットファイルが残っていても構わない。SIGTERM は既定の動作 (即終了) を
+    // 起こすだけでバックエンド側の後始末は走らないため、ファイルは残ることが多い。
+    // その残骸は次の `connect_or_spawn` が起動する新しいバックエンドの
+    // `acquire_listener` 側で「応答しない残骸」として片付けられる。
+}
+
+/// ソケットファイルが消えるまで短い間隔でポーリングする。
+///
+/// バックエンドは `Request::Shutdown` を受けて後始末を終えると、待ち受けていた
+/// ソケットファイルを削除する。それを「終了し切った」の合図として使う。
+fn wait_for_socket_gone(socket_path: &Path, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if !socket_path.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    !socket_path.exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity(path: &str, mtime_secs: u64, size: u64) -> ExecutableIdentity {
+        ExecutableIdentity {
+            path: PathBuf::from(path),
+            mtime: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(mtime_secs),
+            size,
+        }
+    }
+
+    #[test]
+    fn パスと更新時刻とサイズが一致すれば同じ実行ファイルとみなす() {
+        let a = identity("/opt/nebula/nebula-backend", 1_000, 4096);
+        let b = identity("/opt/nebula/nebula-backend", 1_000, 4096);
+        assert!(is_same_executable(&a, &b));
+    }
+
+    /// 実機で実際に踏んだケース: release ビルドで起動し続けているデーモンに、
+    /// パスの違う debug ビルドの GUI がぶら下がる。
+    #[test]
+    fn パスが違えば別の実行ファイルとみなす() {
+        let expected = identity("/opt/nebula/debug/nebula-backend", 1_000, 4096);
+        let actual = identity("/opt/nebula/release/nebula-backend", 1_000, 4096);
+        assert!(!is_same_executable(&expected, &actual));
+    }
+
+    #[test]
+    fn 更新時刻が違えば別の実行ファイルとみなす() {
+        let expected = identity("/opt/nebula/nebula-backend", 2_000, 4096);
+        let actual = identity("/opt/nebula/nebula-backend", 1_000, 4096);
+        assert!(!is_same_executable(&expected, &actual));
+    }
+
+    #[test]
+    fn サイズが違えば別の実行ファイルとみなす() {
+        let expected = identity("/opt/nebula/nebula-backend", 1_000, 4096);
+        let actual = identity("/opt/nebula/nebula-backend", 1_000, 4097);
+        assert!(!is_same_executable(&expected, &actual));
+    }
+
+    /// git のコミットハッシュ方式では検知できない、このリポジトリで実際に
+    /// 起こりうる状況: HEAD は動かさずワーキングツリーだけ変えて再ビルドした
+    /// 場合でも、mtime と size のどちらかは変わる (cargo は内容が変わらない限り
+    /// 実行ファイルを書き直さないので、逆に両方一致していれば安全に使い回せる)。
+    #[test]
+    fn 一部だけ違っても別の実行ファイルとみなす() {
+        let expected = identity("/opt/nebula/nebula-backend", 1_000, 4096);
+        let path_only = identity("/opt/nebula/other/nebula-backend", 1_000, 4096);
+        let mtime_only = identity("/opt/nebula/nebula-backend", 999, 4096);
+        let size_only = identity("/opt/nebula/nebula-backend", 1_000, 1);
+        assert!(!is_same_executable(&expected, &path_only));
+        assert!(!is_same_executable(&expected, &mtime_only));
+        assert!(!is_same_executable(&expected, &size_only));
+    }
 }

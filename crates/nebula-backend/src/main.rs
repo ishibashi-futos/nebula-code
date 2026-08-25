@@ -24,8 +24,15 @@ fn main() -> std::process::ExitCode {
     };
 
     runtime.block_on(async move {
-        let detected = tools::detect_all().await;
-        let state = BackendState::new(detected);
+        // ソケットは検出の完了を待たずに開く。検出に時間がかかるツールが 1 つでも
+        // あると、その間 GUI が「接続できませんでした」になってしまうため。
+        // 検出は切り離して裏で走らせ、終わり次第 Event::ToolsDetected で届ける。
+        let state = BackendState::new(nebula_protocol::DetectedTools::default());
+        let detect_state = state.clone();
+        tokio::spawn(async move {
+            let detected = tools::detect_all().await;
+            detect_state.apply_detected_tools(detected);
+        });
         match ipc::serve(&socket_path, state).await {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {

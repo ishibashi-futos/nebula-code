@@ -3292,6 +3292,7 @@ name = "nebula"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "libc",
  "nebula-core",
  "nebula-protocol",
  "ropey",
