@@ -130,9 +130,16 @@
 
 ## 品質
 
-- **テスト 491 件** (`cargo test --workspace`)。全通過、失敗 0、無視 2 (外部プロセス依存)
-  - nebula-protocol 5 / nebula-core 48 / nebula-backend 248 + 結合 12 / nebula 178
+- **テスト 691 件** (`cargo test --workspace`)。全通過、失敗 0、無視 3 (外部プロセス依存)
+  - nebula-protocol 5 / nebula-core 114 / nebula-backend 257 + 結合 13 / nebula 302
 - 警告 4 件 (いずれも未使用のデッドコード)
+
+**worktree で検証するときの注意**: cargo の dep-info は**相対パス**で記録されるため、
+複数の git worktree が同じ `CARGO_TARGET_DIR` を共有すると cargo が worktree を
+区別できず、他の worktree の成果物を「変更なし」と誤判定して再利用する。
+worktree ごとに `CARGO_TARGET_DIR` を分けるか、
+`cargo clean -p nebula -p nebula-core -p nebula-backend -p nebula-protocol` を
+挟んでから測ること。共有したまま出した数字は当てにならない。
 - 外部コマンドの出力パーサはすべて純粋関数に切り出し、実際に採取した出力で検査
 
 ### 入力欄の共通化
@@ -180,3 +187,7 @@
 | 設定画面 | 未着手。テーマ・キーバインドの変更は再ビルドが必要 |
 | 検索の隠しファイル | `--hidden` を渡す経路がない |
 | 同一語のハイライト | テーマに色はあるが未実装 (`selection_match`) |
+| `nebula update` の実地確認 | GitHub Release が 1 件も無く `.github/workflows/release.yml` も未実行のため、取得〜自己置換の経路は**一度も通していない**。単体テストで固めてあるのは引数解析・semver 比較・アセット名解決・JSON 解析・置換とロールバックの手順まで |
+| リリース CI の実地確認 | `release.yml` は初回タグ push まで未検証。特に Linux 向けの apt 依存一覧は gpui のターゲット依存から逆算した推定 |
+| Markdown プレビューの対応範囲 | 見出し・段落・リスト・チェックリスト・コードブロック・引用・水平線のみ。インライン装飾 (`**太字**`・リンク等)、表、HTML ブロック、4 字下げコードブロックは未対応 |
+| Intel Mac 向けリリース | アセット名は解決できるが CI のビルド行列に無いため、実際には配布物が無い |
