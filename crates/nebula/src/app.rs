@@ -113,6 +113,31 @@ pub struct NebulaApp {
     _event_task: Option<Task<()>>,
 }
 
+/// `open_folder` が応答を受け取った際、一覧にどう反映しアクティブをどこにするか決める。
+///
+/// 戻り値は `(一覧に追加するか, アクティブにするか)`。
+///
+/// - `already_registered`: 同じ `WorkspaceId` が既に `workspaces` に入っているか。
+///   真なら追加しない (バックエンド側で同じルートは重複排除され同じ id が返るため、
+///   ここで弾かないと同じワークスペースがアクティビティバーに何度も並んでしまう)。
+/// - `is_restore_target`: セッション復元中で、これが前回アクティブだったフォルダか。
+///   真なら他の条件によらず必ずアクティブにする。
+/// - `activate_requested`: ユーザー操作 (追加ボタン・⌘O・起動引数) 由来の要求か。
+///   真なら (既に何か開いていても) 常にアクティブにする — これが直すバグの本体で、
+///   従来は `has_active` が真だと無視されて何も切り替わらなかった。
+/// - `has_active`: 現在どれかアクティブなワークスペースがあるか。まだ何も無ければ、
+///   復元/ユーザー操作を問わずその 1 つ目を自動的にアクティブにする。
+fn decide_workspace_update(
+    already_registered: bool,
+    is_restore_target: bool,
+    activate_requested: bool,
+    has_active: bool,
+) -> (bool, bool) {
+    let should_push = !already_registered;
+    let should_activate = is_restore_target || activate_requested || !has_active;
+    (should_push, should_activate)
+}
+
 impl NebulaApp {
     pub fn new(initial_folder: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
         let explorer = cx.new(ExplorerView::new);
@@ -212,7 +237,8 @@ impl NebulaApp {
             // 復元はウィンドウを出した後なので、最初のフレームには影響しない。
             match initial_folder {
                 Some(folder) => {
-                    this.update(cx, |this, cx| this.open_folder(folder, cx)).ok();
+                    this.update(cx, |this, cx| this.open_folder(folder, true, cx))
+                        .ok();
                 }
                 None => {
                     this.update(cx, |this, cx| this.restore_session(cx)).ok();
@@ -312,7 +338,9 @@ impl NebulaApp {
         self.sidebar_visible = session.sidebar_visible;
         self.restoring_active = session.active.clone();
         for root in session.workspaces {
-            self.open_folder(root, cx);
+            // セッション復元由来なので activate=false: 復元対象のフォルダだけを
+            // アクティブにし、順に開くたびに切り替わって最後のものが選ばれる事故を避ける。
+            self.open_folder(root, false, cx);
         }
         cx.notify();
     }
@@ -333,8 +361,18 @@ impl NebulaApp {
     }
 
     /// フォルダをワークスペースとして開く。
-    pub fn open_folder(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
+    ///
+    /// `activate` はユーザー操作 (追加ボタン・⌘O・起動時の引数指定) 由来なら常に `true` を渡し、
+    /// 開いた直後にそのワークスペースへ必ず切り替える。`restore_session` からの呼び出しだけ
+    /// `false` を渡し、複数フォルダを順に開いても最後に開いたものへ勝手に切り替わらないという
+    /// 既存の挙動 (`is_restore_target` によってのみアクティブが決まる) を保つ。
+    pub fn open_folder(&mut self, folder: PathBuf, activate: bool, cx: &mut Context<Self>) {
         let Some(client) = self.client.clone() else {
+            self.notify_status(
+                NotificationLevel::Error,
+                "バックエンドに接続していません".to_string(),
+                cx,
+            );
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -343,9 +381,7 @@ impl NebulaApp {
                 .await;
             this.update(cx, |this, cx| match result {
                 Ok(Response::Workspace(info)) => {
-                    if !this.workspaces.iter().any(|w| w.id == info.id) {
-                        this.workspaces.push(info.clone());
-                    }
+                    let already_registered = this.workspaces.iter().any(|w| w.id == info.id);
                     // 復元中は、前回選択していたフォルダが開かれるまで選択を移さない。
                     // 順に開くたびに切り替わると、最後に開いたものが選ばれてしまう。
                     let is_restore_target = this
@@ -355,7 +391,16 @@ impl NebulaApp {
                     if is_restore_target {
                         this.restoring_active = None;
                     }
-                    if is_restore_target || this.active_workspace.is_none() {
+                    let (should_push, should_activate) = decide_workspace_update(
+                        already_registered,
+                        is_restore_target,
+                        activate,
+                        this.active_workspace.is_some(),
+                    );
+                    if should_push {
+                        this.workspaces.push(info.clone());
+                    }
+                    if should_activate {
                         this.activate_workspace(info.id, cx);
                     }
                     this.save_session();
@@ -656,7 +701,7 @@ impl NebulaApp {
             if let Ok(Ok(Some(paths))) = paths.await
                 && let Some(folder) = paths.into_iter().next()
             {
-                this.update(cx, |this, cx| this.open_folder(folder, cx))
+                this.update(cx, |this, cx| this.open_folder(folder, true, cx))
                     .ok();
             }
         })
@@ -1134,5 +1179,66 @@ impl Render for NebulaApp {
             )
             .child(status_bar)
             .child(self.palette.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decide_workspace_update;
+
+    /// 1つ目のフォルダを開いたときは、一覧に追加され、まだ何もアクティブでないので
+    /// 必ずアクティブになる。
+    #[test]
+    fn 最初のフォルダは追加されアクティブになる() {
+        let (should_push, should_activate) = decide_workspace_update(false, false, true, false);
+        assert!(should_push);
+        assert!(should_activate);
+    }
+
+    /// 既に1つ開いている状態でユーザーが+ボタン等から2つ目を追加すると、
+    /// 一覧に追加された上でアクティブも移る。
+    /// 従来はアクティブが切り替わらず「押しても何も起きない」ように見えた。これを直す。
+    #[test]
+    fn ユーザー操作で2つ目のフォルダを追加すると追加されアクティブが移る() {
+        let (should_push, should_activate) = decide_workspace_update(false, false, true, true);
+        assert!(should_push);
+        assert!(should_activate);
+    }
+
+    /// 既に開いているフォルダをユーザーが再度追加した場合、
+    /// 一覧には二重登録されず、そのワークスペースへアクティブだけを移す。
+    #[test]
+    fn 既に開いているフォルダを再度追加すると二重登録されずアクティブになる() {
+        let (should_push, should_activate) = decide_workspace_update(true, false, true, true);
+        assert!(!should_push);
+        assert!(should_activate);
+    }
+
+    /// セッション復元で複数フォルダを順に開いても、復元対象でないものにはアクティブを奪われない
+    /// (一覧には追加される)。
+    #[test]
+    fn セッション復元では復元対象でなければ追加されてもアクティブを奪わない() {
+        // 2つ目以降 (既に1つアクティブがある) を復元中に開いた場合。
+        let (should_push, should_activate) = decide_workspace_update(false, false, false, true);
+        assert!(should_push);
+        assert!(!should_activate);
+    }
+
+    /// セッション復元での復元対象そのものは、他のフォルダが先にアクティブになっていても
+    /// 必ずアクティブに戻る。
+    #[test]
+    fn セッション復元の対象フォルダは必ずアクティブになる() {
+        let (should_push, should_activate) = decide_workspace_update(false, true, false, true);
+        assert!(should_push);
+        assert!(should_activate);
+    }
+
+    /// セッション復元で1つ目 (まだ何もアクティブでない) を開いた場合は、
+    /// 復元対象かどうかによらずアクティブになる (これまでの挙動を維持)。
+    #[test]
+    fn セッション復元の1つ目は復元対象でなくてもアクティブになる() {
+        let (should_push, should_activate) = decide_workspace_update(false, false, false, false);
+        assert!(should_push);
+        assert!(should_activate);
     }
 }
