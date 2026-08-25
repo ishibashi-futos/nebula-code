@@ -4,7 +4,7 @@ use crate::actions;
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{metrics, theme};
-use crate::ui::{empty_state, h_flex, v_flex};
+use crate::ui::{empty_state, h_flex, simple_tooltip, tooltip_text, v_flex};
 use crate::views::editor_view::{EditorView, EditorViewEvent};
 use crate::views::markdown_preview::MarkdownPreviewView;
 use gpui::prelude::*;
@@ -520,7 +520,8 @@ impl EditorArea {
                             // 不整合になる）ので、必ず先に伝播を止める。
                             cx.stop_propagation();
                             this.close_tab(pane_index, index, cx);
-                        })),
+                        }))
+                        .tooltip(simple_tooltip(tooltip_text::EDITOR_CLOSE_TAB)),
                     )
                     .on_click(cx.listener(move |this, _, _w, cx| {
                         this.active_pane = pane_index;
@@ -599,7 +600,8 @@ impl EditorArea {
                                 preview_visible,
                                 cx,
                             )
-                            .on_click(cx.listener(|this, _, _w, cx| this.toggle_preview(cx))),
+                            .on_click(cx.listener(|this, _, _w, cx| this.toggle_preview(cx)))
+                            .tooltip(simple_tooltip(tooltip_text::EDITOR_TOGGLE_PREVIEW)),
                         )
                     })
                     .child(
@@ -609,7 +611,8 @@ impl EditorArea {
                             false,
                             cx,
                         )
-                        .on_click(cx.listener(|this, _, _w, cx| this.split_right(cx))),
+                        .on_click(cx.listener(|this, _, _w, cx| this.split_right(cx)))
+                        .tooltip(simple_tooltip(tooltip_text::EDITOR_SPLIT_RIGHT)),
                     ),
             )
             .child(content)

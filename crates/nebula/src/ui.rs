@@ -11,7 +11,7 @@ use crate::assets::Icon;
 use crate::theme::{Theme, theme};
 use gpui::prelude::*;
 use gpui::{
-    App, AvailableSpace, Bounds, ClipboardItem, Context, Div, Element, ElementId,
+    AnyView, App, AvailableSpace, Bounds, ClipboardItem, Context, Div, Element, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font,
     GlobalElementId, Hsla, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size, Stateful, Style,
@@ -175,6 +175,133 @@ pub fn ghost_button(
         .cursor_pointer()
         .hover(|s| s.bg(theme.bg_overlay).text_color(theme.text))
         .child(label.into())
+}
+
+/// アイコンのみ・略語のみのボタンに添える、1 行のツールチップ。
+///
+/// gpui コアには Zed の `ui::Tooltip::text` のような既製ビューが無いため、
+/// 補完欄・ホバーカード・コンテキストメニュー ([`crate::views::explorer::ExplorerView`]
+/// の右クリックメニューなど) と同じ角丸パネルを自前で描く小さな `Render` ビューを
+/// 都度組み立てて返す。`.tooltip(simple_tooltip("…"))` として
+/// [`gpui::InteractiveElement::tooltip`] にそのまま渡せる。
+pub fn simple_tooltip(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
+    move |_window, cx| {
+        cx.new(|_cx| SimpleTooltip {
+            text: text.clone(),
+        })
+        .into()
+    }
+}
+
+struct SimpleTooltip {
+    text: SharedString,
+}
+
+impl Render for SimpleTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = theme(cx).clone();
+        div()
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .bg(theme.bg_overlay)
+            .border_1()
+            .border_color(theme.border_glow)
+            .shadow_lg()
+            .text_size(px(11.))
+            .text_color(theme.text)
+            .child(self.text.clone())
+    }
+}
+
+/// ツールチップの文言を集約する。
+///
+/// 各ビューにベタ書きすると、似た意味の文言が少しずつ違う言い回しで重複したり、
+/// 見直すときに一覧できなかったりする。ここに集めておき、下のテストで
+/// 「空でない」「重複が無い」「ショートカット併記の形式が揃っている」を機械的に縛る。
+pub mod tooltip_text {
+    // -- アプリ全体 (app.rs) --
+    pub const ADD_WORKSPACE: &str = "ワークスペースを追加 (⌘O)";
+    pub const SHOW_EXPLORER: &str = "エクスプローラー (⌘⇧E)";
+    pub const SHOW_SEARCH: &str = "検索 (⌘⇧F)";
+    pub const SHOW_GIT: &str = "ソース管理 (⌘⇧G)";
+    pub const SHOW_CODEX: &str = "Codex (⌘⇧A)";
+    pub const SETTINGS: &str = "設定 (未実装)";
+    pub const CLOSE_PANEL: &str = "パネルを閉じる (⌘J)";
+
+    // -- エクスプローラー (views/explorer.rs) --
+    pub const EXPLORER_NEW_FILE: &str = "新規ファイル";
+    pub const EXPLORER_NEW_FOLDER: &str = "新規フォルダ";
+    pub const EXPLORER_RELOAD: &str = "再読み込み";
+    pub const EXPLORER_TOGGLE_HIDDEN: &str = "隠しファイルの表示切り替え";
+
+    // -- 検索 (views/search.rs) --
+    pub const SEARCH_REFRESH: &str = "検索をやり直す";
+    pub const SEARCH_TOGGLE_REPLACE: &str = "置換欄の表示切り替え";
+    pub const SEARCH_CASE_SENSITIVE: &str = "大文字・小文字を区別";
+    pub const SEARCH_WHOLE_WORD: &str = "単語単位で検索";
+    pub const SEARCH_REGEX: &str = "正規表現を使用";
+
+    // -- ソース管理 (views/git.rs) --
+    pub const GIT_SWITCH_BRANCH: &str = "ブランチを切り替え";
+    pub const GIT_PULL: &str = "プル";
+    pub const GIT_PUSH: &str = "プッシュ";
+    pub const GIT_DISCARD: &str = "変更を破棄";
+    pub const GIT_UNSTAGE: &str = "ステージを取り消す";
+    pub const GIT_STAGE: &str = "ステージに追加";
+
+    // -- ターミナル (views/terminal.rs) --
+    pub const TERMINAL_ADD: &str = "新しいターミナル";
+    pub const TERMINAL_CLOSE_TAB: &str = "ターミナルを閉じる";
+
+    // -- エディタ (views/editor.rs) --
+    pub const EDITOR_CLOSE_TAB: &str = "タブを閉じる (⌘W)";
+    pub const EDITOR_TOGGLE_PREVIEW: &str = "Markdown プレビューの表示切り替え (⌘⇧V)";
+    pub const EDITOR_SPLIT_RIGHT: &str = "右に分割 (⌘\\)";
+
+    /// 一覧チェック用。文言を増やしたときはここにも必ず足すこと。
+    ///
+    /// テストでしか参照しないので `#[cfg(test)]` で括る。無くすと通常ビルドで
+    /// 「参照されていない」という dead_code 警告が新規に出てしまう。
+    #[cfg(test)]
+    pub const ALL: &[&str] = &[
+        ADD_WORKSPACE,
+        SHOW_EXPLORER,
+        SHOW_SEARCH,
+        SHOW_GIT,
+        SHOW_CODEX,
+        SETTINGS,
+        CLOSE_PANEL,
+        EXPLORER_NEW_FILE,
+        EXPLORER_NEW_FOLDER,
+        EXPLORER_RELOAD,
+        EXPLORER_TOGGLE_HIDDEN,
+        SEARCH_REFRESH,
+        SEARCH_TOGGLE_REPLACE,
+        SEARCH_CASE_SENSITIVE,
+        SEARCH_WHOLE_WORD,
+        SEARCH_REGEX,
+        GIT_SWITCH_BRANCH,
+        GIT_PULL,
+        GIT_PUSH,
+        GIT_DISCARD,
+        GIT_UNSTAGE,
+        GIT_STAGE,
+        TERMINAL_ADD,
+        TERMINAL_CLOSE_TAB,
+        EDITOR_CLOSE_TAB,
+        EDITOR_TOGGLE_PREVIEW,
+        EDITOR_SPLIT_RIGHT,
+    ];
+
+    /// ワークスペースの切り替えボタンだけは押した先の名前を埋め込む動的な文言なので、
+    /// 定数ではなく純粋関数として切り出す。
+    pub fn workspace_switch(name: &str) -> String {
+        format!("{name} に切り替え")
+    }
 }
 
 /// 空状態の案内。どのパネルでも同じ調子で出す。
@@ -1683,6 +1810,71 @@ mod tests {
         assert_eq!(format_keystroke("cmd-shift-p"), "⌘⇧P");
         assert_eq!(format_keystroke("ctrl-`"), "⌃`");
         assert_eq!(format_keystroke("cmd-enter"), "⌘⏎");
+    }
+
+    // -----------------------------------------------------------------
+    // ツールチップ文言
+    // -----------------------------------------------------------------
+    //
+    // GUI の見た目 (角丸・影・色) は目視でしか確認できないので、ここでは
+    // 文言そのものの一覧性 (重複や空文字が無いか) と表記ゆれ (ショートカット
+    // 併記の形式) だけを機械的に縛る。
+
+    /// `"… (⌘…)"` の形が守られているかを判定する。
+    ///
+    /// `⌘` を含まない文言 (「設定 (未実装)」のような注記の丸括弧) は
+    /// ショートカット併記ではないので対象外にする。
+    fn shortcut_suffix_is_well_formed(text: &str) -> bool {
+        if !text.contains('⌘') {
+            return true;
+        }
+        let Some(start) = text.rfind(" (⌘") else {
+            return false;
+        };
+        // "(⌘" の直後から末尾の ")" の手前まで、丸括弧が紛れていないこと。
+        let inner = &text[start + " (".len()..text.len() - 1];
+        text.ends_with(')') && !inner.contains(['(', ')'])
+    }
+
+    #[test]
+    fn ショートカット併記の形式を判定できる() {
+        assert!(shortcut_suffix_is_well_formed("ワークスペースを追加 (⌘O)"));
+        // ⌘ を含まない注記は対象外なので、丸括弧があっても崩れているとは判定しない。
+        assert!(shortcut_suffix_is_well_formed("設定 (未実装)"));
+        assert!(!shortcut_suffix_is_well_formed("ワークスペースを追加(⌘O)"));
+        assert!(!shortcut_suffix_is_well_formed("ワークスペースを追加 (⌘O"));
+    }
+
+    #[test]
+    fn すべてのツールチップ文言は空でない() {
+        for &text in tooltip_text::ALL {
+            assert!(!text.is_empty());
+        }
+    }
+
+    #[test]
+    fn ツールチップ文言に重複が無い() {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
+        for &text in tooltip_text::ALL {
+            assert!(seen.insert(text), "重複した文言: {text}");
+        }
+    }
+
+    #[test]
+    fn ツールチップのショートカット併記は形式が揃っている() {
+        for &text in tooltip_text::ALL {
+            assert!(
+                shortcut_suffix_is_well_formed(text),
+                "ショートカット併記の形式が崩れている: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn ワークスペース切り替えの文言に名前が含まれる() {
+        assert_eq!(tooltip_text::workspace_switch("Nebula"), "Nebula に切り替え");
     }
 
     // -----------------------------------------------------------------

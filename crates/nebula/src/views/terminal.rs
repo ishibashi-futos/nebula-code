@@ -15,7 +15,7 @@
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{Theme, metrics, theme};
-use crate::ui::{focus_border, h_flex, icon, truncate_middle, v_flex};
+use crate::ui::{focus_border, h_flex, icon, simple_tooltip, tooltip_text, truncate_middle, v_flex};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, BorderStyle, Bounds, ClipboardItem, Context, ElementId, Entity, FocusHandle,
@@ -561,7 +561,8 @@ impl TerminalView {
                     .on_click(cx.listener(|this, _, window, cx| {
                         window.focus(&this.focus_handle);
                         this.create_terminal(cx);
-                    })),
+                    }))
+                    .tooltip(simple_tooltip(tooltip_text::TERMINAL_ADD)),
             )
             .child(div().flex_1())
             .children(self.active_state().and_then(|state| {
@@ -622,7 +623,8 @@ impl TerminalView {
                         // 親タブの切り替えまで発火させない。
                         cx.stop_propagation();
                         this.close_terminal(id, cx);
-                    })),
+                    }))
+                    .tooltip(simple_tooltip(tooltip_text::TERMINAL_CLOSE_TAB)),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.active = Some(id);

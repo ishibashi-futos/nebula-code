@@ -16,7 +16,8 @@ use crate::ipc_client::BackendClient;
 use crate::theme::theme;
 use crate::ui::{
     NewlinePolicy, TextInput, TextInputEvent, empty_state, ghost_button, h_flex, icon, icon_button,
-    list_row, nebula_accent_line, panel_header, primary_button, v_flex,
+    list_row, nebula_accent_line, panel_header, primary_button, simple_tooltip, tooltip_text,
+    v_flex,
 };
 use crate::views::git::{GitSection, code_for, status_char, status_color};
 use gpui::prelude::*;
@@ -828,30 +829,33 @@ impl ExplorerView {
                 h_flex()
                     .gap(px(2.))
                     .child(
-                        icon_button("explorer-new-file", Icon::Plus, false, cx).on_click(
-                            cx.listener(|this, _e, window, cx| {
+                        icon_button("explorer-new-file", Icon::Plus, false, cx)
+                            .on_click(cx.listener(|this, _e, window, cx| {
                                 this.start_create(false, window, cx)
-                            }),
-                        ),
+                            }))
+                            .tooltip(simple_tooltip(tooltip_text::EXPLORER_NEW_FILE)),
                     )
                     .child(
-                        icon_button("explorer-new-dir", Icon::Folder, false, cx).on_click(
-                            cx.listener(|this, _e, window, cx| this.start_create(true, window, cx)),
-                        ),
+                        icon_button("explorer-new-dir", Icon::Folder, false, cx)
+                            .on_click(cx.listener(|this, _e, window, cx| {
+                                this.start_create(true, window, cx)
+                            }))
+                            .tooltip(simple_tooltip(tooltip_text::EXPLORER_NEW_FOLDER)),
                     )
                     .child(
-                        icon_button("explorer-reload", Icon::Refresh, false, cx).on_click(
-                            cx.listener(|this, _e, _window, cx| {
+                        icon_button("explorer-reload", Icon::Refresh, false, cx)
+                            .on_click(cx.listener(|this, _e, _window, cx| {
                                 this.reload_all(cx);
                                 cx.notify();
-                            }),
-                        ),
+                            }))
+                            .tooltip(simple_tooltip(tooltip_text::EXPLORER_RELOAD)),
                     )
                     .child(
                         icon_button("explorer-toggle-hidden", Icon::Eye, self.show_hidden, cx)
                             .on_click(cx.listener(|this, _e, _window, cx| {
                                 this.toggle_show_hidden(cx);
-                            })),
+                            }))
+                            .tooltip(simple_tooltip(tooltip_text::EXPLORER_TOGGLE_HIDDEN)),
                     ),
             )
             .into_any_element()

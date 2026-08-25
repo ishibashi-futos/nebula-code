@@ -11,7 +11,7 @@ use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::session::Session;
 use crate::theme::{metrics, theme};
-use crate::ui::{activity_item, h_flex, icon, icon_button, v_flex};
+use crate::ui::{activity_item, h_flex, icon, icon_button, simple_tooltip, tooltip_text, v_flex};
 use crate::views::codex::CodexView;
 use crate::views::editor::{EditorArea, EditorAreaEvent};
 use crate::views::explorer::{ExplorerEvent, ExplorerView};
@@ -786,6 +786,7 @@ impl NebulaApp {
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         this.activate_workspace(id, cx);
                     }))
+                    .tooltip(simple_tooltip(tooltip_text::workspace_switch(&info.name)))
             })
             .collect();
 
@@ -816,7 +817,8 @@ impl NebulaApp {
                             .child(icon(Icon::Plus, px(15.), theme.text_faint))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.on_open_folder(&actions::OpenFolder, window, cx);
-                            })),
+                            }))
+                            .tooltip(simple_tooltip(tooltip_text::ADD_WORKSPACE)),
                     ),
             )
             .child(div().mx(px(12.)).h(px(1.)).bg(theme.border).flex_none())
@@ -835,7 +837,8 @@ impl NebulaApp {
                             cx.listener(|this, _, _w, cx| {
                                 this.set_sidebar(SidebarTab::Explorer, cx)
                             }),
-                        ),
+                        )
+                        .tooltip(simple_tooltip(tooltip_text::SHOW_EXPLORER)),
                     )
                     .child(
                         activity_item(
@@ -846,7 +849,8 @@ impl NebulaApp {
                         )
                         .on_click(
                             cx.listener(|this, _, _w, cx| this.set_sidebar(SidebarTab::Search, cx)),
-                        ),
+                        )
+                        .tooltip(simple_tooltip(tooltip_text::SHOW_SEARCH)),
                     )
                     .child(
                         activity_item(
@@ -857,7 +861,8 @@ impl NebulaApp {
                         )
                         .on_click(
                             cx.listener(|this, _, _w, cx| this.set_sidebar(SidebarTab::Git, cx)),
-                        ),
+                        )
+                        .tooltip(simple_tooltip(tooltip_text::SHOW_GIT)),
                     )
                     .child(
                         activity_item(
@@ -868,19 +873,20 @@ impl NebulaApp {
                         )
                         .on_click(
                             cx.listener(|this, _, _w, cx| this.set_sidebar(SidebarTab::Codex, cx)),
-                        ),
+                        )
+                        .tooltip(simple_tooltip(tooltip_text::SHOW_CODEX)),
                     ),
             )
             .child(v_flex().pb(px(8.)).items_center().child(
-                icon_button("act-settings", Icon::Settings, false, cx).on_click(cx.listener(
-                    |this, _, _w, cx| {
+                icon_button("act-settings", Icon::Settings, false, cx)
+                    .on_click(cx.listener(|this, _, _w, cx| {
                         this.notify_status(
                             NotificationLevel::Info,
                             "設定画面は今後の実装対象です".to_string(),
                             cx,
                         );
-                    },
-                )),
+                    }))
+                    .tooltip(simple_tooltip(tooltip_text::SETTINGS)),
             ))
             .into_any_element()
     }
@@ -996,12 +1002,14 @@ impl NebulaApp {
                         cx,
                     ))
                     .child(div().flex_1())
-                    .child(icon_button("panel-close", Icon::Close, false, cx).on_click(
-                        cx.listener(|this, _, _w, cx| {
-                            this.panel_visible = false;
-                            cx.notify();
-                        }),
-                    )),
+                    .child(
+                        icon_button("panel-close", Icon::Close, false, cx)
+                            .on_click(cx.listener(|this, _, _w, cx| {
+                                this.panel_visible = false;
+                                cx.notify();
+                            }))
+                            .tooltip(simple_tooltip(tooltip_text::CLOSE_PANEL)),
+                    ),
             )
             .child(div().flex_1().overflow_hidden().child(match active {
                 PanelTab::Terminal => self.terminal.clone().into_any_element(),

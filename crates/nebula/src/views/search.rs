@@ -13,7 +13,8 @@ use crate::ipc_client::BackendClient;
 use crate::theme::{Theme, theme};
 use crate::ui::{
     TextInput, TextInputEvent, empty_state, focus_border, ghost_button, h_flex, icon, icon_button,
-    list_row, nebula_accent_line, panel_header, primary_button, v_flex,
+    list_row, nebula_accent_line, panel_header, primary_button, simple_tooltip, tooltip_text,
+    v_flex,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -655,7 +656,8 @@ impl SearchView {
                     }))
                     .child(
                         icon_button("search-refresh", Icon::Refresh, false, cx)
-                            .on_click(cx.listener(|this, _, _w, cx| this.start_search(cx))),
+                            .on_click(cx.listener(|this, _, _w, cx| this.start_search(cx)))
+                            .tooltip(simple_tooltip(tooltip_text::SEARCH_REFRESH)),
                     ),
             )
             .into_any_element()
@@ -698,7 +700,8 @@ impl SearchView {
                             .on_click(cx.listener(|this, _, _w, cx| {
                                 this.show_replace = !this.show_replace;
                                 cx.notify();
-                            })),
+                            }))
+                            .tooltip(simple_tooltip(tooltip_text::SEARCH_TOGGLE_REPLACE)),
                     )
                     .child(
                         v_flex()
@@ -722,21 +725,28 @@ impl SearchView {
                                             .on_click(cx.listener(|this, _, _w, cx| {
                                                 this.case_sensitive = !this.case_sensitive;
                                                 this.start_search(cx);
-                                            })),
+                                            }))
+                                            .tooltip(simple_tooltip(
+                                                tooltip_text::SEARCH_CASE_SENSITIVE,
+                                            )),
                                     )
                                     .child(
                                         toggle_button("search-word", "ab|", self.whole_word, cx)
                                             .on_click(cx.listener(|this, _, _w, cx| {
                                                 this.whole_word = !this.whole_word;
                                                 this.start_search(cx);
-                                            })),
+                                            }))
+                                            .tooltip(simple_tooltip(
+                                                tooltip_text::SEARCH_WHOLE_WORD,
+                                            )),
                                     )
                                     .child(
                                         toggle_button("search-regex", ".*", self.is_regex, cx)
                                             .on_click(cx.listener(|this, _, _w, cx| {
                                                 this.is_regex = !this.is_regex;
                                                 this.start_search(cx);
-                                            })),
+                                            }))
+                                            .tooltip(simple_tooltip(tooltip_text::SEARCH_REGEX)),
                                     ),
                             )
                             .when(show_replace, |el| {
