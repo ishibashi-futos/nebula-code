@@ -287,6 +287,18 @@ fn move_vertical(
 ) -> usize {
     let current = rope.char_to_line(offset);
     let last_line = rope.len_lines().saturating_sub(1);
+    // 既に最終行 (先頭行) にいる場合、ゴール桁によるクランプではなく行末 (行頭) へ
+    // 直接飛ばす。VS Code や Vim など主要エディタと同じ挙動。
+    //
+    // `current` そのものが既に最終行/先頭行のときだけ発動させ、複数行移動 (Page) で
+    // 初めて最終行/先頭行に着地するケース (current != last_line/0) は対象外とする。
+    // そちらは従来どおりゴール桁でクランプする。
+    if direction == Direction::Forward && current >= last_line {
+        return rope.line_end_offset(last_line);
+    }
+    if direction == Direction::Backward && current == 0 {
+        return 0;
+    }
     let target_row = match direction {
         Direction::Backward => current.saturating_sub(rows as usize),
         Direction::Forward => (current + rows as usize).min(last_line),
@@ -379,6 +391,103 @@ mod tests {
         assert_eq!(r.offset_to_position(sel.head).column, 2, "短い行では行末に収まる");
         move_selection(&r, &mut sel, Movement::Line, Direction::Forward, false);
         assert_eq!(r.offset_to_position(sel.head).column, 6, "元の桁に復帰する");
+    }
+
+    #[test]
+    fn 最終行の途中で下キーを押すと行末へ移動する() {
+        let r = rope("abc\ndef\nghijkl");
+        let mut sel = Selection::caret(r.position_to_offset(Position::new(2, 2)));
+        move_selection(&r, &mut sel, Movement::Line, Direction::Forward, false);
+        assert_eq!(sel.head, r.line_end_offset(2), "ゴール桁ではなく行末まで飛ぶ");
+    }
+
+    #[test]
+    fn 最終行の末尾で下キーを押しても動かない() {
+        let r = rope("abc\ndef\nghijkl");
+        let mut sel = Selection::caret(r.line_end_offset(2));
+        move_selection(&r, &mut sel, Movement::Line, Direction::Forward, false);
+        assert_eq!(sel.head, r.line_end_offset(2), "既に行末なので no-op");
+    }
+
+    #[test]
+    fn 最終行が空行のとき下キーを押しても動かない() {
+        let r = rope("abc\ndef\n");
+        let last_line = r.len_lines() - 1;
+        assert_eq!(r.line_len(last_line), 0, "末尾の改行が生む空行を前提にする");
+        let mut sel = Selection::caret(r.line_end_offset(last_line));
+        move_selection(&r, &mut sel, Movement::Line, Direction::Forward, false);
+        assert_eq!(sel.head, r.line_end_offset(last_line));
+    }
+
+    #[test]
+    fn 最初の行の途中で上キーを押すと行頭へ移動する() {
+        // ↓ を最終行で行末に飛ばすなら、対称性のため ↑ も先頭行で行頭に飛ばす
+        // (VS Code / Vim / macOS 標準テキストと同じ挙動)。
+        let r = rope("abc\ndef\nghijkl");
+        let mut sel = Selection::caret(r.position_to_offset(Position::new(0, 2)));
+        move_selection(&r, &mut sel, Movement::Line, Direction::Backward, false);
+        assert_eq!(sel.head, 0);
+    }
+
+    #[test]
+    fn 途中の行からページダウンで最終行に着地する場合はゴール桁でクランプされる() {
+        // 「今いる行が既に最終行」のときだけ行末へ飛ばす。複数行ジャンプで
+        // 初めて最終行に着地するケースは従来どおりゴール桁でクランプする。
+        let r = rope("abcdef\nxy\nabcdefgh");
+        let mut sel = Selection::caret(r.position_to_offset(Position::new(0, 5)));
+        move_selection(&r, &mut sel, Movement::Page(2), Direction::Forward, false);
+        assert_eq!(r.offset_to_position(sel.head).row, 2);
+        assert_eq!(
+            r.offset_to_position(sel.head).column,
+            5,
+            "行末 (列8) ではなくゴール桁 (列5) に着地する"
+        );
+    }
+
+    #[test]
+    fn 選択を伴う下キーでも最終行では行末へ移動する() {
+        let r = rope("abc\ndef\nghijkl");
+        let mut sel = Selection::new(1, r.position_to_offset(Position::new(2, 2)));
+        move_selection(&r, &mut sel, Movement::Line, Direction::Forward, true);
+        assert_eq!(sel.head, r.line_end_offset(2));
+        assert_eq!(sel.anchor, 1, "extend では anchor が固定されたままであること");
+    }
+
+    #[test]
+    fn 行末へ飛んだ直後に上キーを押すと元のゴール桁に復帰する() {
+        // move_selection は EOL ジャンプ後も goal_column を「ジャンプ前のゴール桁」
+        // のまま保持する (行末の列で上書きしない)。したがって↓で短い最終行の
+        // 行末へ飛んだ直後に↑を押すと、行末列ではなく元のゴール桁に戻る。
+        // これは「短い行を素通りしても元の桁に戻る」既存のゴール桁保持の挙動
+        // (上下移動でゴール桁を保持する テスト) と一貫している。
+        let r = rope("abcdefgh\nxyz");
+        let mut sel = Selection::caret(r.position_to_offset(Position::new(0, 6)));
+        move_selection(&r, &mut sel, Movement::Line, Direction::Forward, false);
+        assert_eq!(
+            r.offset_to_position(sel.head).column,
+            3,
+            "短い最終行なので行末 (列3) に収まる"
+        );
+        move_selection(&r, &mut sel, Movement::Line, Direction::Backward, false);
+        assert_eq!(
+            r.offset_to_position(sel.head).column,
+            6,
+            "行末列ではなく元のゴール桁 (列6) に復帰する"
+        );
+    }
+
+    #[test]
+    fn 最終行に絵文字があっても行末オフセットが文字境界を割らない() {
+        let r = rope("abc\nこんにちは👨‍👩‍👧");
+        let last_line = r.len_lines() - 1;
+        let mut sel = Selection::caret(r.position_to_offset(Position::new(last_line as u32, 3)));
+        move_selection(&r, &mut sel, Movement::Line, Direction::Forward, false);
+        let expected = r.line_end_offset(last_line);
+        assert_eq!(sel.head, expected);
+        assert_eq!(expected, r.len_chars(), "行末は文書末とも一致する");
+        // 文字境界であることの確認: この offset で char() を呼んでも panic しない
+        // (書記素の途中を指していれば ropey がここで境界エラーを起こす)。
+        let _ = r.try_char_to_byte(sel.head);
     }
 
     #[test]
