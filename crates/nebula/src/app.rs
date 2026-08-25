@@ -537,7 +537,22 @@ impl NebulaApp {
             self.panel = tab;
             self.panel_visible = true;
         }
+        self.ensure_terminal_launched(cx);
         cx.notify();
+    }
+
+    /// ターミナルタブが表示された直後に呼ぶ。表示先が別タブ、またはパネル自体が
+    /// 隠れているときは何もしない — 実際の起動判断 (二重起動防止や既存タブの
+    /// 有無) は `TerminalView::ensure_terminal` 側が持つ。
+    ///
+    /// `set_panel` のほかに `on_toggle_panel` (Cmd+J) からも呼ぶ。既定のパネル
+    /// タブは起動時から `Terminal` なので、`set_panel` を経由しない Cmd+J だけで
+    /// 初めてパネルを開くケースがあり、そちらを取りこぼすと「＋」も出ない
+    /// 空のパネルが残ってしまう。
+    fn ensure_terminal_launched(&mut self, cx: &mut Context<Self>) {
+        if self.panel_visible && self.panel == PanelTab::Terminal {
+            self.terminal.update(cx, |v, cx| v.ensure_terminal(cx));
+        }
     }
 
     // -- アクション --
@@ -581,6 +596,7 @@ impl NebulaApp {
         cx: &mut Context<Self>,
     ) {
         self.panel_visible = !self.panel_visible;
+        self.ensure_terminal_launched(cx);
         cx.notify();
     }
 

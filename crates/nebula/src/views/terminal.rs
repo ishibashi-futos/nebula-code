@@ -15,14 +15,14 @@
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{Theme, metrics, theme};
-use crate::ui::{focus_border, h_flex, icon, primary_button, truncate_middle, v_flex};
+use crate::ui::{focus_border, h_flex, icon, truncate_middle, v_flex};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, BorderStyle, Bounds, Context, ElementId, Entity, FocusHandle, Focusable, Font,
-    FontStyle, FontWeight, GlobalElementId, Hsla, KeyDownEvent, Keystroke, LayoutId, MouseButton,
-    MouseDownEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString,
-    StrikethroughStyle, Style, TextRun, UnderlineStyle, Window, div, fill, outline, point, px,
-    relative, size,
+    AnyElement, App, BorderStyle, Bounds, ClipboardItem, Context, ElementId, Entity, FocusHandle,
+    Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla, KeyDownEvent, Keystroke,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    ScrollWheelEvent, ShapedLine, SharedString, StrikethroughStyle, Style, TextRun, UnderlineStyle,
+    Window, anchored, deferred, div, fill, outline, point, px, relative, size,
 };
 use nebula_protocol::{
     Event, Request, Response, TermColor, TerminalCell, TerminalId, TerminalSpec, WorkspaceInfo,
@@ -77,6 +77,50 @@ pub struct GridMetrics {
     line_height: Pixels,
     rows: u16,
     cols: u16,
+    /// 端末領域の左上 (ウィンドウ座標)。マウス位置をセルへ変換するのに要る。
+    origin: Point<Pixels>,
+}
+
+/// マウス選択の範囲 (グリッド座標)。
+///
+/// `anchor` はドラッグを始めた側で固定、`head` はドラッグ中に動く側
+/// (呼び名は `nebula_core::Selection` に合わせてある)。上下どちらに向かって
+/// ドラッグしても選べるよう、使う側は `normalized` で読み順に直してから使う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GridSelection {
+    anchor_row: usize,
+    anchor_col: usize,
+    head_row: usize,
+    head_col: usize,
+}
+
+impl GridSelection {
+    fn caret(row: usize, col: usize) -> Self {
+        Self {
+            anchor_row: row,
+            anchor_col: col,
+            head_row: row,
+            head_col: col,
+        }
+    }
+
+    /// ドラッグしていない (1 セルも選んでいない) か。
+    fn is_empty(&self) -> bool {
+        self.anchor_row == self.head_row && self.anchor_col == self.head_col
+    }
+
+    /// 読み順 (行が小さい方を先) に正規化した (開始行, 開始桁, 終了行, 終了桁)。
+    /// 終了桁は最終行の中で選ばれた最後の桁 (これを含む)。
+    fn normalized(&self) -> (usize, usize, usize, usize) {
+        let anchor = (self.anchor_row, self.anchor_col);
+        let head = (self.head_row, self.head_col);
+        let (start, end) = if anchor <= head {
+            (anchor, head)
+        } else {
+            (head, anchor)
+        };
+        (start.0, start.1, end.0, end.1)
+    }
 }
 
 pub struct TerminalView {
@@ -96,6 +140,13 @@ pub struct TerminalView {
     pending_input: Vec<(TerminalId, Vec<u8>)>,
     sending_input: bool,
     focus_handle: FocusHandle,
+    /// マウスドラッグで選んだ範囲。ドラッグを終えてもコピーできるよう、
+    /// マウスを離した後も保持する。
+    selection: Option<GridSelection>,
+    /// 左ボタンを押してから離すまでの間だけ true。
+    selecting: bool,
+    /// 右クリックメニューを開いている位置 (ウィンドウ座標)。
+    context_menu: Option<Point<Pixels>>,
 }
 
 impl TerminalView {
@@ -111,16 +162,21 @@ impl TerminalView {
             pending_input: Vec::new(),
             sending_input: false,
             focus_handle: cx.focus_handle(),
+            selection: None,
+            selecting: false,
+            context_menu: None,
         }
     }
 
     pub fn set_client(&mut self, client: BackendClient, cx: &mut Context<Self>) {
         self.client = Some(client);
+        self.ensure_terminal(cx);
         cx.notify();
     }
 
     pub fn set_workspace(&mut self, workspace: WorkspaceInfo, cx: &mut Context<Self>) {
         self.workspace = Some(workspace);
+        self.ensure_terminal(cx);
         cx.notify();
     }
 
@@ -202,6 +258,21 @@ impl TerminalView {
         })
         .detach();
         cx.notify();
+    }
+
+    /// 端末パネルを表示したときに呼ぶ。1 つも端末が無ければ既定シェルを起こす。
+    ///
+    /// 判定そのものは `should_auto_launch_terminal` に切り出してある
+    /// (境界をテストで固定するため)。ここでは自身の状態をその引数へ渡すだけ。
+    pub fn ensure_terminal(&mut self, cx: &mut Context<Self>) {
+        if should_auto_launch_terminal(
+            self.creating,
+            !self.order.is_empty(),
+            self.client.is_some(),
+            self.workspace.is_some(),
+        ) {
+            self.create_terminal(cx);
+        }
     }
 
     fn close_terminal(&mut self, id: TerminalId, cx: &mut Context<Self>) {
@@ -288,6 +359,19 @@ impl TerminalView {
         if self.active.is_none() {
             return;
         }
+        // macOS の作法である Cmd+C / Cmd+V はキー変換の通常経路 (keystroke_to_bytes)
+        // より先に処理する。Ctrl+C は SIGINT なので platform 修飾を見ることで
+        // 混同しない (下の is_copy_shortcut / is_paste_shortcut を参照)。
+        if is_copy_shortcut(&event.keystroke) {
+            self.copy_selection(cx);
+            cx.stop_propagation();
+            return;
+        }
+        if is_paste_shortcut(&event.keystroke) {
+            self.paste_from_clipboard(cx);
+            cx.stop_propagation();
+            return;
+        }
         let Some(bytes) = keystroke_to_bytes(&event.keystroke) else {
             return;
         };
@@ -296,9 +380,102 @@ impl TerminalView {
         cx.stop_propagation();
     }
 
-    fn on_mouse_down(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);
+        // ドラッグ選択の開始点を記録する。実寸がまだ無ければ (初回接続前など) 何もしない。
+        if self.active.is_some()
+            && let Some(metrics) = self.grid_metrics
+        {
+            let (row, col) = position_to_cell(
+                f32::from(event.position.x),
+                f32::from(event.position.y),
+                f32::from(metrics.origin.x),
+                f32::from(metrics.origin.y),
+                f32::from(metrics.cell_width),
+                f32::from(metrics.line_height),
+                metrics.rows,
+                metrics.cols,
+            );
+            self.selection = Some(GridSelection::caret(row, col));
+            self.selecting = true;
+        }
         cx.notify();
+    }
+
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.selecting {
+            return;
+        }
+        // パネルの外でボタンを離すと (bubble ハンドラである) on_mouse_up が発火しない。
+        // ここでボタンの状態を見て打ち切らないと、外で離した後に領域内へ戻すだけで
+        // ボタンを押していないのに選択が伸び続けてしまう。
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.selecting = false;
+            return;
+        }
+        let Some(metrics) = self.grid_metrics else {
+            return;
+        };
+        let (row, col) = position_to_cell(
+            f32::from(event.position.x),
+            f32::from(event.position.y),
+            f32::from(metrics.origin.x),
+            f32::from(metrics.origin.y),
+            f32::from(metrics.cell_width),
+            f32::from(metrics.line_height),
+            metrics.rows,
+            metrics.cols,
+        );
+        let Some(selection) = self.selection.as_mut() else {
+            return;
+        };
+        // セルが変わらないあいだは再描画しない。ドラッグ中は大量に飛んでくるので。
+        if selection.head_row == row && selection.head_col == col {
+            return;
+        }
+        selection.head_row = row;
+        selection.head_col = col;
+        cx.notify();
+    }
+
+    fn on_mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.selecting = false;
+        // ドラッグせずクリックしただけなら選択は残さない (1 セルだけのコピーは意味がない)。
+        if self.selection.is_some_and(|s| s.is_empty()) {
+            self.selection = None;
+        }
+        cx.notify();
+    }
+
+    fn on_context_menu(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle);
+        if self.active.is_none() {
+            return;
+        }
+        self.context_menu = Some(event.position);
+        cx.notify();
+    }
+
+    /// 選択範囲をクリップボードへコピーする。選択が無ければ何もしない。
+    fn copy_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(selection) = self.selection else {
+            return;
+        };
+        let Some(state) = self.active_state() else {
+            return;
+        };
+        let text = extract_selected_text(&state.grid, &selection);
+        if !text.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    /// クリップボードの文字列を、キー入力と全く同じ経路 (queue_input) で PTY へ流す。
+    fn paste_from_clipboard(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        self.queue_input(text.into_bytes(), cx);
     }
 
     fn on_scroll_wheel(
@@ -317,6 +494,11 @@ impl TerminalView {
         let lines = (f32::from(delta.y) / f32::from(grid_metrics.line_height)).round() as i32;
         if lines == 0 {
             return;
+        }
+        // 可視グリッドの内容がスクロールでずれるので、選択は座標ごと無効にする。
+        // 保持したままだとハイライトもコピー結果も別の行を指すことになる。
+        if self.selection.take().is_some() {
+            cx.notify();
         }
         cx.spawn(async move |_this, _cx| {
             client
@@ -464,13 +646,19 @@ impl TerminalView {
         )
     }
 
-    fn render_launcher(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// 端末がまだ無い間の案内。ボタンは出さない — 端末は `ensure_terminal` が
+    /// パネルを開いた時点で自動的に起こす。ここに来るのは、ワークスペースが
+    /// まだ無いか、起動要求がまだ返ってきていない一瞬か、直前のタブを
+    /// 閉じた直後 (タブバーの「＋」で作り直せる) のいずれか。
+    fn render_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme(cx).clone();
         let ready = self.client.is_some() && self.workspace.is_some();
-        let hint = if ready {
-            "シェルを起動して、この宙域にコマンドを送ります"
-        } else {
+        let hint = if !ready {
             "フォルダを開くとターミナルを起動できます"
+        } else if self.creating {
+            "シェルを起動しています…"
+        } else {
+            "上の＋からターミナルを起動できます"
         };
         v_flex()
             .size_full()
@@ -484,15 +672,103 @@ impl TerminalView {
                     .text_color(theme.text_faint)
                     .child(hint),
             )
-            .child(
-                primary_button("terminal-launch", "ターミナルを起動", ready, cx).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        window.focus(&this.focus_handle);
-                        this.create_terminal(cx);
-                    }),
+            .into_any_element()
+    }
+
+    // -- 右クリックメニュー --
+
+    fn render_context_menu(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let position = self.context_menu?;
+        let theme = theme(cx);
+        let can_copy = self.selection.is_some();
+
+        let items = vec![
+            self.menu_item(
+                "terminal-menu-copy",
+                Icon::Copy,
+                "コピー",
+                can_copy,
+                cx.listener(|this, _e, _window, cx| {
+                    this.copy_selection(cx);
+                    this.context_menu = None;
+                    cx.notify();
+                }),
+                cx,
+            ),
+            self.menu_item(
+                "terminal-menu-paste",
+                Icon::Files,
+                "貼り付け",
+                true,
+                cx.listener(|this, _e, _window, cx| {
+                    this.paste_from_clipboard(cx);
+                    this.context_menu = None;
+                    cx.notify();
+                }),
+                cx,
+            ),
+        ];
+
+        // gpui にメニュー部品は無いので、絶対配置した箱を自前で組む (explorer.rs と同じ要領)。
+        // 位置はマウスのウィンドウ座標なので、ウィンドウ基準で置ける anchored に載せる。
+        Some(
+            deferred(
+                anchored().position(position).snap_to_window().child(
+                    v_flex()
+                        .absolute()
+                        .min_w(px(160.))
+                        .py(px(4.))
+                        .rounded(px(8.))
+                        .bg(theme.bg_overlay)
+                        .border_1()
+                        .border_color(theme.border_glow)
+                        .shadow_lg()
+                        // メニュー上のクリックが背後の端末領域 (ドラッグ選択の on_mouse_down) へ
+                        // 突き抜けないようにする。無いと「コピー」を押した瞬間に選択が
+                        // メニュー位置の 1 セルへ上書きされ、コピーが空になる。
+                        .occlude()
+                        .on_mouse_down_out(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+                            this.context_menu = None;
+                            cx.notify();
+                        }))
+                        .children(items),
                 ),
             )
-            .into_any_element()
+            .into_any_element(),
+        )
+    }
+
+    fn menu_item(
+        &self,
+        id: impl Into<ElementId>,
+        glyph: Icon,
+        label: &'static str,
+        enabled: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = theme(cx);
+        let row = h_flex()
+            .id(id)
+            .h(px(26.))
+            .px(px(10.))
+            .gap(px(8.))
+            .text_size(px(12.))
+            .text_color(if enabled {
+                theme.text_muted
+            } else {
+                theme.text_faint
+            })
+            .child(icon(glyph, px(13.), theme.text_faint))
+            .child(label);
+        if enabled {
+            row.cursor_pointer()
+                .hover(|s| s.bg(theme.accent_soft).text_color(theme.text))
+                .on_click(on_click)
+                .into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 }
 
@@ -507,7 +783,10 @@ impl Render for TerminalView {
         let theme = theme(cx).clone();
         let focused = self.focus_handle.is_focused(window);
         let has_terminal = self.active.is_some();
-        let tab_bar = (!self.order.is_empty()).then(|| self.render_tab_bar(cx));
+        let ready = self.client.is_some() && self.workspace.is_some();
+        // タブが 1 つも無くても、起こせる状態なら「＋」だけのタブバーを出す。
+        // ボタンを廃したぶん、最初の 1 枚を手で作り直す手段はこれだけになるため。
+        let tab_bar = (!self.order.is_empty() || ready).then(|| self.render_tab_bar(cx));
         let banner = self.render_exit_banner(cx);
 
         let body = if has_terminal {
@@ -524,12 +803,13 @@ impl Render for TerminalView {
                 })
                 .into_any_element()
         } else {
-            self.render_launcher(cx)
+            self.render_empty_state(cx)
         };
 
         v_flex()
             .key_context("Terminal")
             .track_focus(&self.focus_handle)
+            .relative()
             .size_full()
             .overflow_hidden()
             .bg(theme.bg_surface)
@@ -538,10 +818,14 @@ impl Render for TerminalView {
             .border_color(focus_border(focused, &theme))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_context_menu))
             .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
             .children(tab_bar)
             .child(body)
             .children(banner)
+            .children(self.render_context_menu(cx))
     }
 }
 
@@ -624,6 +908,10 @@ impl Element for TerminalElement {
         let mut lines = Vec::new();
         let mut cursor = None;
 
+        // ドラッグしていない (1 セルも選んでいない) 選択はハイライトしない。
+        // マウスダウン直後は anchor == head の状態で 1 フレーム挟まるため。
+        let selection = self.view.read(cx).selection.filter(|s| !s.is_empty());
+
         if let Some(state) = self.view.read(cx).active_state() {
             let cursor_row = state.cursor_row as usize;
             let cursor_col = state.cursor_col as usize;
@@ -642,6 +930,19 @@ impl Element for TerminalElement {
                             size(cell_width * len as f32, line_height),
                         ),
                         color,
+                    ));
+                }
+
+                // 選択のハイライト。背景色の上、文字の下に重ねる (下の paint 参照)。
+                if let Some((from, to)) =
+                    selection.and_then(|s| selection_columns_in_row(&s, row, cells.len()))
+                {
+                    backgrounds.push(fill(
+                        Bounds::new(
+                            point(bounds.origin.x + cell_width * from as f32, y),
+                            size(cell_width * (to - from) as f32, line_height),
+                        ),
+                        theme.selection,
                     ));
                 }
 
@@ -689,6 +990,7 @@ impl Element for TerminalElement {
                     line_height,
                     rows,
                     cols,
+                    origin: bounds.origin,
                 },
                 cx,
             );
@@ -775,6 +1077,30 @@ fn grid_dimensions(width: f32, height: f32, cell_width: f32, line_height: f32) -
     (rows, cols)
 }
 
+/// マウス座標 (ウィンドウ基準) をグリッドのセル位置 (行, 桁) に変換する。
+///
+/// セルの寸法は等幅フォント前提で一定 — 全角文字が来ても字送りが変わるだけで
+/// グリッド上の桁幅そのものは変わらない (ファイル冒頭のコメント参照)。
+/// 領域の外に出ても呼び出し側が扱いやすいよう、常に有効な行・桁へ丸める
+/// (負値は 0 へ、右端・下端を超える値は最終桁・最終行へ)。
+fn position_to_cell(
+    x: f32,
+    y: f32,
+    origin_x: f32,
+    origin_y: f32,
+    cell_width: f32,
+    line_height: f32,
+    rows: u16,
+    cols: u16,
+) -> (usize, usize) {
+    if cell_width <= 0.0 || line_height <= 0.0 || rows == 0 || cols == 0 {
+        return (0, 0);
+    }
+    let col = ((x - origin_x) / cell_width).floor().max(0.0) as usize;
+    let row = ((y - origin_y) / line_height).floor().max(0.0) as usize;
+    (row.min(rows as usize - 1), col.min(cols as usize - 1))
+}
+
 /// 変化した行をグリッドへ反映する。
 ///
 /// 端末が拡がった直後は、まだ GUI 側に存在しない行番号が届きうる。足りなければ伸ばす。
@@ -844,6 +1170,61 @@ fn visible_len(cells: &[TerminalCell]) -> usize {
         .rposition(|cell| !(cell.ch == ' ' && cell.flags == 0))
         .map(|last| last + 1)
         .unwrap_or(0)
+}
+
+/// 正規化した選択のうち、指定した行に属する桁範囲 [開始, 終了) を返す。
+/// その行が選択に含まれなければ `None`。
+///
+/// 最初の行は選択開始の桁から行末まで、最後の行は行頭から選択終了の桁まで、
+/// 間の行は全桁を選ぶ — 複数行にまたがる選択の一般的な挙動に合わせている。
+/// 選択のハイライト描画とコピー用テキストの抽出の両方から使う共通ロジック。
+fn selection_columns_in_row(
+    selection: &GridSelection,
+    row: usize,
+    row_len: usize,
+) -> Option<(usize, usize)> {
+    let (start_row, start_col, end_row, end_col) = selection.normalized();
+    if row < start_row || row > end_row || row_len == 0 {
+        return None;
+    }
+    let from = if row == start_row { start_col.min(row_len) } else { 0 };
+    let to = if row == end_row {
+        (end_col + 1).min(row_len)
+    } else {
+        row_len
+    };
+    (from < to).then_some((from, to))
+}
+
+/// 選択範囲のセルからコピー用のテキストを取り出す。
+///
+/// 各行とも、端末が桁数ぶん埋めている行末の空白セルは含めない
+/// (`visible_len` と同じ判定)。行の途中や行頭の空白はそのまま残す —
+/// 削るのはあくまで「実際には打たれていない行末の埋め草」だけ。
+/// 全角文字の後続セルは中身が無い (常に空白) ので読み飛ばす。
+/// 複数行にまたがる選択は行の間を改行でつなぐ。
+fn extract_selected_text(grid: &[Vec<TerminalCell>], selection: &GridSelection) -> String {
+    let (start_row, _, end_row, _) = selection.normalized();
+    (start_row..=end_row)
+        .map(|row| {
+            let Some(cells) = grid.get(row) else {
+                return String::new();
+            };
+            let Some((from, to)) = selection_columns_in_row(selection, row, cells.len()) else {
+                return String::new();
+            };
+            let content_end = visible_len(cells).min(to);
+            if from >= content_end {
+                return String::new();
+            }
+            cells[from..content_end]
+                .iter()
+                .filter(|c| c.flags & cell_flags::WIDE_TRAILER == 0)
+                .map(|c| c.ch)
+                .collect()
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 /// 1 行を桁位置つきの描画区間へ分割したうちの 1 つ。
@@ -1012,6 +1393,34 @@ fn next_active_after_close(order: &[TerminalId], closed: TerminalId) -> Option<T
         .get(index + 1)
         .or_else(|| index.checked_sub(1).and_then(|prev| order.get(prev)))
         .copied()
+}
+
+/// 端末パネルを開いたときに、既定シェルを自動で起こしてよいか。
+///
+/// `has_tabs` には `order` が空でないかを渡す — 終了 (exited) したタブが
+/// 残っている間は自動再起動しない。さもないと落ちるコマンドを打つたびに
+/// 際限なく起動し直してしまう。作り直したければタブバーの「＋」から手で行う。
+fn should_auto_launch_terminal(
+    creating: bool,
+    has_tabs: bool,
+    has_client: bool,
+    has_workspace: bool,
+) -> bool {
+    !creating && !has_tabs && has_client && has_workspace
+}
+
+/// macOS の作法で Cmd+C (コピー) か。
+///
+/// Ctrl+C は SIGINT でありコピーではないので、platform 修飾 (Cmd) が
+/// 立っているときだけコピーと判定する。混同すると Ctrl+C でプロセスを
+/// 止められなくなる。
+fn is_copy_shortcut(keystroke: &Keystroke) -> bool {
+    keystroke.modifiers.platform && keystroke.key == "c"
+}
+
+/// macOS の作法で Cmd+V (貼り付け) か。
+fn is_paste_shortcut(keystroke: &Keystroke) -> bool {
+    keystroke.modifiers.platform && keystroke.key == "v"
 }
 
 /// キー入力を PTY へ流すバイト列に変換する。
@@ -1212,6 +1621,27 @@ mod tests {
         assert_eq!(keystroke_to_bytes(&key("b", alt)), Some(b"\x1bb".to_vec()));
     }
 
+    #[test]
+    fn cmd_c_はコピーと判定され_ctrl_c_は判定されない() {
+        let cmd = Modifiers {
+            platform: true,
+            ..Modifiers::default()
+        };
+        assert!(is_copy_shortcut(&key("c", cmd)));
+        // Ctrl+C は SIGINT。誤ってコピー扱いすると端末でプロセスを止められなくなる。
+        assert!(!is_copy_shortcut(&key("c", ctrl())));
+    }
+
+    #[test]
+    fn cmd_v_はペーストと判定され_修飾無しの_v_は判定されない() {
+        let cmd = Modifiers {
+            platform: true,
+            ..Modifiers::default()
+        };
+        assert!(is_paste_shortcut(&key("v", cmd)));
+        assert!(!is_paste_shortcut(&key("v", Modifiers::default())));
+    }
+
     // -- グリッド --
 
     #[test]
@@ -1244,6 +1674,141 @@ mod tests {
             (24, 80),
             "寸法が取れないときは既定値"
         );
+    }
+
+    // -- 選択 (マウス座標 -> セル、セル -> コピー用テキスト) --
+
+    #[test]
+    fn 左上の角ちょうどは_0_行_0_列になる() {
+        assert_eq!(
+            position_to_cell(100.0, 50.0, 100.0, 50.0, 8.0, 16.0, 24, 80),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn 右下の最終セルちょうどは最終行最終列になる() {
+        // 80 列 24 行なら最終セルは列 79・行 23。その左上ぴったりを指す。
+        let x = 100.0 + 8.0 * 79.0;
+        let y = 50.0 + 16.0 * 23.0;
+        assert_eq!(
+            position_to_cell(x, y, 100.0, 50.0, 8.0, 16.0, 24, 80),
+            (23, 79)
+        );
+    }
+
+    #[test]
+    fn 領域より左上の負値は_0_行_0_列に丸められる() {
+        // 原点 (100, 50) より左上の座標を渡す。相対位置が負になるケース。
+        assert_eq!(
+            position_to_cell(0.0, 0.0, 100.0, 50.0, 8.0, 16.0, 24, 80),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn 領域より右下の大きすぎる値は最終行最終列に丸められる() {
+        let x = 100.0 + 8.0 * 1000.0;
+        let y = 50.0 + 16.0 * 1000.0;
+        assert_eq!(
+            position_to_cell(x, y, 100.0, 50.0, 8.0, 16.0, 24, 80),
+            (23, 79)
+        );
+    }
+
+    #[test]
+    fn 全角文字の後続セルの範囲内をクリックしてもそのセルの列になる() {
+        // 全角文字は 2 列を占めるが、字送り幅そのものは列ごとに一定
+        // (ファイル冒頭のコメント参照)。後続セル (列 1) の範囲内なら列 1 が返ればよい。
+        let x = 100.0 + 8.0 * 1.0 + 4.0;
+        assert_eq!(
+            position_to_cell(x, 50.0, 100.0, 50.0, 8.0, 16.0, 24, 80),
+            (0, 1)
+        );
+    }
+
+    /// テスト用のグリッド。"hello world" の 1 行だけ。
+    fn hello_world_row() -> Vec<Vec<TerminalCell>> {
+        vec!["hello world".chars().map(cell).collect()]
+    }
+
+    #[test]
+    fn 一行内の部分選択を取り出す() {
+        let grid = hello_world_row();
+        let selection = GridSelection {
+            anchor_row: 0,
+            anchor_col: 2,
+            head_row: 0,
+            head_col: 6,
+        };
+        assert_eq!(extract_selected_text(&grid, &selection), "llo w");
+    }
+
+    #[test]
+    fn 右から左へドラッグしても同じ範囲になる() {
+        // head が anchor より前に来ても (右から左へのドラッグ)、
+        // 選ばれる文字は座標の前後を入れ替えたときと同じでなければならない。
+        let grid = hello_world_row();
+        let selection = GridSelection {
+            anchor_row: 0,
+            anchor_col: 6,
+            head_row: 0,
+            head_col: 2,
+        };
+        assert_eq!(extract_selected_text(&grid, &selection), "llo w");
+    }
+
+    #[test]
+    fn 複数行の選択は改行でつなぐ() {
+        let grid = vec![
+            vec![cell('f'), cell('o'), cell('o')],
+            vec![cell('b'), cell('a'), cell('r')],
+        ];
+        // 1 行目は開始桁から行末まで、2 行目は行頭から終了桁まで。
+        let selection = GridSelection {
+            anchor_row: 0,
+            anchor_col: 1,
+            head_row: 1,
+            head_col: 1,
+        };
+        assert_eq!(extract_selected_text(&grid, &selection), "oo\nba");
+    }
+
+    #[test]
+    fn 行末の埋め草の空白は取り除かれる() {
+        let grid = vec![vec![cell('h'), cell('i'), cell(' '), cell(' '), cell(' ')]];
+        // 行末まで選んでも、実際には打たれていない埋め草の空白は含めない。
+        let selection = GridSelection {
+            anchor_row: 0,
+            anchor_col: 0,
+            head_row: 0,
+            head_col: 4,
+        };
+        assert_eq!(extract_selected_text(&grid, &selection), "hi");
+    }
+
+    #[test]
+    fn 全角文字を含む行は後続セルを除いて連結する() {
+        let grid = vec![vec![cell('あ'), wide_trailer(), cell('b')]];
+        let selection = GridSelection {
+            anchor_row: 0,
+            anchor_col: 0,
+            head_row: 0,
+            head_col: 2,
+        };
+        assert_eq!(extract_selected_text(&grid, &selection), "あb");
+    }
+
+    #[test]
+    fn 何も打たれていない行の選択は空文字列になる() {
+        let grid = vec![vec![cell(' '), cell(' '), cell(' ')]];
+        let selection = GridSelection {
+            anchor_row: 0,
+            anchor_col: 0,
+            head_row: 0,
+            head_col: 2,
+        };
+        assert_eq!(extract_selected_text(&grid, &selection), "");
     }
 
     // -- 色 --
@@ -1447,5 +2012,34 @@ mod tests {
             None
         );
         assert_eq!(next_active_after_close(&ids, TerminalId(9)), None);
+    }
+
+    // -- 自動起動 --
+
+    #[test]
+    fn 起動処理中は自動起動しない() {
+        assert!(!should_auto_launch_terminal(true, false, true, true));
+    }
+
+    #[test]
+    fn 既存タブがあれば自動起動しない() {
+        // exited のまま残っているタブも「既存タブ」に含める。でないと落ちる
+        // コマンドを打つたびに際限なく再起動してしまう。
+        assert!(!should_auto_launch_terminal(false, true, true, true));
+    }
+
+    #[test]
+    fn バックエンドへ未接続なら自動起動しない() {
+        assert!(!should_auto_launch_terminal(false, false, false, true));
+    }
+
+    #[test]
+    fn 作業フォルダがまだ無ければ自動起動しない() {
+        assert!(!should_auto_launch_terminal(false, false, true, false));
+    }
+
+    #[test]
+    fn 起動処理中でなく既存タブも無く準備が整っていれば自動起動する() {
+        assert!(should_auto_launch_terminal(false, false, true, true));
     }
 }
