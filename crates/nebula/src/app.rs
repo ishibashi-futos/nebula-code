@@ -270,6 +270,7 @@ impl NebulaApp {
                 self.git.update(cx, |v, cx| v.handle_event(&event, cx));
                 self.editor_area
                     .update(cx, |v, cx| v.handle_event(&event, cx));
+                self.explorer.update(cx, |v, cx| v.handle_event(&event, cx));
             }
             Event::Diagnostics { .. } => {
                 self.problems.update(cx, |v, cx| v.handle_event(&event, cx));
@@ -310,6 +311,8 @@ impl NebulaApp {
             self.panel_height = px(height);
         }
         self.sidebar_visible = session.sidebar_visible;
+        self.explorer
+            .update(cx, |v, cx| v.set_show_hidden(session.explorer_show_hidden, cx));
         self.restoring_active = session.active.clone();
         for root in session.workspaces {
             self.open_folder(root, cx);
@@ -318,7 +321,7 @@ impl NebulaApp {
     }
 
     /// 現在の状態をセッションとして書き出す。
-    fn save_session(&self) {
+    fn save_session(&self, cx: &App) {
         let session = Session {
             workspaces: self.workspaces.iter().map(|w| w.root.clone()).collect(),
             active: self
@@ -328,6 +331,7 @@ impl NebulaApp {
             sidebar_width: Some(f32::from(self.sidebar_width)),
             panel_height: Some(f32::from(self.panel_height)),
             sidebar_visible: self.sidebar_visible,
+            explorer_show_hidden: self.explorer.read(cx).show_hidden(),
         };
         session.save();
     }
@@ -358,7 +362,7 @@ impl NebulaApp {
                     if is_restore_target || this.active_workspace.is_none() {
                         this.activate_workspace(info.id, cx);
                     }
-                    this.save_session();
+                    this.save_session(cx);
                     cx.notify();
                 }
                 Ok(_) => {}
@@ -377,7 +381,7 @@ impl NebulaApp {
 
     pub fn activate_workspace(&mut self, id: WorkspaceId, cx: &mut Context<Self>) {
         self.active_workspace = Some(id);
-        self.save_session();
+        self.save_session(cx);
         let Some(info) = self.workspaces.iter().find(|w| w.id == id).cloned() else {
             return;
         };
@@ -409,6 +413,9 @@ impl NebulaApp {
             ExplorerEvent::Notify(level, message) => {
                 self.notify_status(*level, message.clone(), cx);
             }
+            // フィールド自体はエクスプローラーが持つが、書き出し先のセッションを
+            // 知っているのはシェル側だけなので、保存はここで行う。
+            ExplorerEvent::HiddenToggled => self.save_session(cx),
         }
     }
 
@@ -526,7 +533,7 @@ impl NebulaApp {
             self.sidebar = tab;
             self.sidebar_visible = true;
         }
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -860,7 +867,7 @@ impl NebulaApp {
             // 毎フレーム書くと 60Hz でディスクを叩くことになる。
             .on_mouse_up(
                 gpui::MouseButton::Left,
-                cx.listener(|this: &mut Self, _, _w, _cx| this.save_session()),
+                cx.listener(|this: &mut Self, _, _w, cx| this.save_session(cx)),
             )
             .into_any_element()
     }
@@ -887,7 +894,7 @@ impl NebulaApp {
             .on_drag(PanelResize, |_, _, _, cx| cx.new(|_| DragGhost))
             .on_mouse_up(
                 gpui::MouseButton::Left,
-                cx.listener(|this: &mut Self, _, _w, _cx| this.save_session()),
+                cx.listener(|this: &mut Self, _, _w, cx| this.save_session(cx)),
             )
             .into_any_element()
     }

@@ -435,7 +435,10 @@ fn buffer_language(
 }
 
 /// git 操作の後に最新状態を配る。GUI 側から再要求させずに済ませる。
-async fn emit_git_status(state: &Arc<BackendState>, id: nebula_protocol::WorkspaceId) {
+///
+/// `pub(crate)`: `git_watch` がファイル変更のデバウンス後に呼ぶため、
+/// ここでの実装 (git 管理下かの確認・失敗時に黙って諦める判断) を再利用する。
+pub(crate) async fn emit_git_status(state: &Arc<BackendState>, id: nebula_protocol::WorkspaceId) {
     let Ok(repo) = state.git_root(id) else {
         return;
     };

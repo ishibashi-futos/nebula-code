@@ -5,11 +5,11 @@
 * [ ] UI上の各種ボタンにTooltipを追加する
 * [ ] ターミナル上のコピー・ペースト機能を追加（右クリックでコンテキストメニュー表示なども）
 * [ ] `nebura update` によるSelf Update機構の追加(reference: `bake update` https://github.com/ishibashi-futos/overbake)
-* [ ] `.git`, `.gitignore` 等の隠しフォルダ非表示、再表示機能
+* [x] `.git`, `.gitignore` 等の隠しフォルダ非表示、再表示機能
 * [x] `JetBrains Mono` の組み込み・デフォルト化
 * [ ] Markdownファイル記述支援機構の追加（箇条書き、チェックリスト改行時自動作成、見出しのハイライトなど）
 * [ ] Markdownファイルプレビュー機能の追加
-* [ ] gitの差分有無がエクスプローラーからも確認できて欲しい
+* [x] gitの差分有無がエクスプローラーからも確認できて欲しい
 * [x] エディタで最終行にカーソルがある場合に、↓キーを押すと、最終行の末尾列までカーソルが移動して欲しい
 * [x] 古いバックエンドプロセスが生き残っていると、新しい GUI がそちらに相乗りして古いコードで動き続ける
       （ソケット名が `nebula-{PROTOCOL_VERSION}.sock` 固定で、`connect_or_spawn` が既存ソケットへ無条件に接続するため。

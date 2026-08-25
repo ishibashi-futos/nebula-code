@@ -2,7 +2,7 @@
 //!
 //! 通常は GUI から自動起動されるが、`--socket` を指定して単体でも動かせる。
 
-use nebula_backend::{BackendState, ipc, tools};
+use nebula_backend::{BackendState, git_watch, ipc, tools};
 use std::path::PathBuf;
 
 fn main() -> std::process::ExitCode {
@@ -33,6 +33,9 @@ fn main() -> std::process::ExitCode {
             let detected = tools::detect_all().await;
             detect_state.apply_detected_tools(detected);
         });
+        // 保存や外部での git 操作のような、バックエンドを経由しないファイル変更でも
+        // git status を追従させる (詳細は git_watch のモジュール doc を参照)。
+        git_watch::spawn(state.clone());
         match ipc::serve(&socket_path, state).await {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {

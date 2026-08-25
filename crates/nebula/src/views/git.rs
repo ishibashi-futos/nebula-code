@@ -118,7 +118,11 @@ fn is_changed(code: GitStatusCode) -> bool {
 }
 
 /// その区分の行に出す状態コード。
-fn code_for(entry: &GitFileStatus, section: GitSection) -> GitStatusCode {
+///
+/// エクスプローラーのファイルバッジも同じ優先順位 (作業ツリーに変化があればそれ、
+/// 無ければ索引) で 1 つの代表コードが要るため、`GitSection::Changed` を渡す形で
+/// ここを再利用する (コピペしない)。
+pub(crate) fn code_for(entry: &GitFileStatus, section: GitSection) -> GitStatusCode {
     match section {
         GitSection::Staged => entry.index,
         GitSection::Untracked => GitStatusCode::Untracked,
@@ -133,7 +137,7 @@ fn code_for(entry: &GitFileStatus, section: GitSection) -> GitStatusCode {
 }
 
 /// 状態を 1 文字で表す。git の porcelain 表記に合わせる。
-fn status_char(code: GitStatusCode) -> char {
+pub(crate) fn status_char(code: GitStatusCode) -> char {
     match code {
         GitStatusCode::Modified => 'M',
         GitStatusCode::Added => 'A',
@@ -147,7 +151,7 @@ fn status_char(code: GitStatusCode) -> char {
     }
 }
 
-fn status_color(code: GitStatusCode, theme: &Theme) -> Hsla {
+pub(crate) fn status_color(code: GitStatusCode, theme: &Theme) -> Hsla {
     match code {
         GitStatusCode::Added | GitStatusCode::Copied | GitStatusCode::Untracked => theme.git_added,
         GitStatusCode::Modified | GitStatusCode::Renamed => theme.git_modified,
