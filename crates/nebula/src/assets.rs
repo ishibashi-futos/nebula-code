@@ -42,6 +42,23 @@ static ICONS: &[(&str, &str)] = &[
     ("warning", include_str!("../assets/icons/warning.svg")),
 ];
 
+/// JetBrains Mono の埋め込みバイト列 (Regular/Bold/Italic/BoldItalic の 4 ウェイト)。
+///
+/// `AssetSource` の `load`/`list` には流さない。フォントは `TextSystem::add_fonts` に
+/// 直接渡す別経路が必要なため、ここでは `add_fonts` にそのまま渡せる形で公開する。
+/// ライセンス (SIL OFL 1.1) は `assets/fonts/OFL.txt` として同梱し、再配布条件を満たす。
+static MONO_FONTS: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-BoldItalic.ttf"),
+];
+
+/// `TextSystem::add_fonts` に渡すための埋め込みフォント一覧。
+pub fn mono_font_bytes() -> Vec<Cow<'static, [u8]>> {
+    MONO_FONTS.iter().map(|bytes| Cow::Borrowed(*bytes)).collect()
+}
+
 pub struct NebulaAssets;
 
 impl AssetSource for NebulaAssets {
@@ -174,5 +191,21 @@ mod tests {
     #[test]
     fn 存在しないアセットは_none() {
         assert!(NebulaAssets.load("icons/nope.svg").unwrap().is_none());
+    }
+
+    #[test]
+    fn 埋め込みフォントは全ウェイトが非空でttfマジックナンバーを持つ() {
+        let fonts = mono_font_bytes();
+        assert_eq!(fonts.len(), 4, "Regular/Bold/Italic/BoldItalic の4ウェイトが必要");
+        for font in fonts {
+            assert!(!font.is_empty(), "フォントデータが空");
+            // TrueType は 0x00010000、OpenType (CFFアウトライン) は "OTTO" で始まる。
+            let is_truetype = font.starts_with(&[0x00, 0x01, 0x00, 0x00]);
+            let is_opentype = font.starts_with(b"OTTO");
+            assert!(
+                is_truetype || is_opentype,
+                "TTF/OTF のマジックナンバーで始まっていない"
+            );
+        }
     }
 }

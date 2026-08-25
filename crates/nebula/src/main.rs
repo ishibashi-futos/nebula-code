@@ -1,7 +1,7 @@
 //! Nebula Code の起動口。
 //!
 //! 冷間起動 200ms 以下という目標のため、`main` から最初のフレームまでの間には
-//! 「テーマとキーバインドの登録」「ウィンドウ生成」しか置かない。
+//! 「テーマとキーバインドの登録」「フォントの登録」「ウィンドウ生成」しか置かない。
 //! バックエンド接続・言語文法のコンパイル・git 状態の取得はすべてフレーム後に回す。
 
 mod actions;
@@ -50,6 +50,13 @@ fn main() {
         .run(move |cx: &mut App| {
             theme::init(cx);
             actions::init(cx);
+
+            // JetBrains Mono を埋め込みバイト列から登録する。ウィンドウを開く前に
+            // 済ませないと初回フレームがフォールバック書体で描かれてしまう。
+            // 失敗してもプロセスは止めず、警告のみ出して等幅フォールバックへ委ねる。
+            if let Err(err) = cx.text_system().add_fonts(assets::mono_font_bytes()) {
+                eprintln!("nebula: JetBrains Mono の登録に失敗しました: {err}");
+            }
 
             let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
             let window = cx.open_window(
