@@ -18,7 +18,7 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent,
     UTF16Selection, Window, div, px,
 };
-use nebula_core::markdown::{ListContinuation, list_continuation};
+use nebula_core::markdown::{ListContinuation, list_continuation, marker_end_column};
 use nebula_core::selection::{Direction, Movement, move_selection, normalize};
 use nebula_core::{RopeExt, Selection, TextBuffer};
 use nebula_protocol::{
@@ -682,7 +682,17 @@ impl EditorView {
             if is_markdown {
                 match list_continuation(&line) {
                     Some(ListContinuation::Continue(prefix)) => {
-                        edits.push(Edit::replace(sel.range(), format!("\n{prefix}")));
+                        // キャレットがマーカーより手前 (行頭やマーカーの内部) にある
+                        // ときに継続すると、`- abc` の行頭で改行しただけで
+                        // `\n- - abc` のようにマーカーが二重になる。マーカーを
+                        // 打ち終わった後ろにいるときだけ継続する。
+                        let column = sel.start() - rope.line_to_char(row);
+                        let after_marker = marker_end_column(&line).is_some_and(|end| column >= end);
+                        if after_marker {
+                            edits.push(Edit::replace(sel.range(), format!("\n{prefix}")));
+                        } else {
+                            edits.push(Edit::replace(sel.range(), format!("\n{indent}")));
+                        }
                     }
                     Some(ListContinuation::Terminate) if sel.is_empty() => {
                         // マーカーだけで中身が空の行だったのでリストから抜ける。

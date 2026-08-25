@@ -30,6 +30,32 @@ pub enum ListContinuation {
 ///
 /// 該当する行頭パターンが無い行 (見出しや普通の文章、水平線 `---` など) は `None`。
 pub fn list_continuation(line: &str) -> Option<ListContinuation> {
+    let (marker_end, next_marker) = parse_marker(line)?;
+
+    // マーカーの後ろが空白だけなら、その項目には中身が無い。
+    if line[marker_end..].trim().is_empty() {
+        Some(ListContinuation::Terminate)
+    } else {
+        Some(ListContinuation::Continue(next_marker))
+    }
+}
+
+/// 行頭マーカーの終端の桁 (文字数)。マーカーが無い行は `None`。
+///
+/// キャレットがマーカーより手前にあるときに継続を抑止するために要る。位置を見ずに
+/// 継続すると、`- abc` の行頭で改行しただけで `\n- - abc` のようにマーカーが
+/// 二重になってしまう。
+pub fn marker_end_column(line: &str) -> Option<usize> {
+    let (marker_end, _) = parse_marker(line)?;
+    Some(line[..marker_end].chars().count())
+}
+
+/// 行頭のマーカーを解析する。
+///
+/// 返すのは (マーカー全体の終端バイト位置 (インデント込み), 次の行に置くマーカー)。
+/// `list_continuation` と `marker_end_column` の両方がここを通ることで、
+/// 認識するパターンの一覧が 1 箇所だけになる。
+fn parse_marker(line: &str) -> Option<(usize, String)> {
     let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
     let (indent, rest) = line.split_at(indent_len);
 
@@ -38,12 +64,7 @@ pub fn list_continuation(line: &str) -> Option<ListContinuation> {
         .or_else(|| parse_ordered(rest))
         .or_else(|| parse_blockquote(rest))?;
 
-    // マーカーの後ろが空白だけなら、その項目には中身が無い。
-    if rest[consumed..].trim().is_empty() {
-        Some(ListContinuation::Terminate)
-    } else {
-        Some(ListContinuation::Continue(format!("{indent}{next_marker}")))
-    }
+    Some((indent_len + consumed, format!("{indent}{next_marker}")))
 }
 
 /// チェックリスト `- [ ] ` / `- [x] ` / `- [X] `。
@@ -114,6 +135,40 @@ fn parse_blockquote(rest: &str) -> Option<(usize, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn マーカーの終端桁を返す() {
+        assert_eq!(marker_end_column("- abc"), Some(2));
+        assert_eq!(marker_end_column("* abc"), Some(2));
+        assert_eq!(marker_end_column("  - abc"), Some(4), "インデントを含めた桁を返す");
+        assert_eq!(marker_end_column("- [x] done"), Some(6));
+        assert_eq!(marker_end_column("12. item"), Some(4));
+        assert_eq!(marker_end_column("> quote"), Some(2));
+    }
+
+    #[test]
+    fn マーカーの無い行の終端桁は_none() {
+        assert_eq!(marker_end_column("ただの文章"), None);
+        assert_eq!(marker_end_column("---"), None);
+        assert_eq!(marker_end_column("# 見出し"), None);
+    }
+
+    /// 全角文字を含む行でも、桁は文字数で数える (バイト数ではない)。
+    /// バイト数を返すと、呼び出し側のキャレット桁 (文字単位) と食い違い、
+    /// 日本語の項目でマーカー位置の判定がずれる。
+    #[test]
+    fn 全角文字を含む行でも終端桁は文字数で数える() {
+        assert_eq!(marker_end_column("- あいうえお"), Some(2));
+        assert_eq!(marker_end_column("  - 日本語"), Some(4));
+    }
+
+    /// 全角空白は Markdown のインデントではない (CommonMark が字下げとして扱うのは
+    /// 半角空白とタブだけ)。全角空白で始まる行は箇条書きではなく段落なので継続しない。
+    #[test]
+    fn 全角空白始まりの行はリストとして扱わない() {
+        assert_eq!(marker_end_column("　- abc"), None);
+        assert_eq!(list_continuation("　- abc"), None);
+    }
 
     #[test]
     fn ハイフンの箇条書きが継続する() {
