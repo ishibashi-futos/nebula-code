@@ -8,15 +8,17 @@ use crate::git::GitService;
 use crate::lsp::LspService;
 use crate::search::SearchService;
 use crate::terminal::TerminalService;
+use crate::tools::SharedTools;
 use crate::watch::WatchService;
 use nebula_core::language::Language;
 use nebula_core::{LanguageRegistry, SyntaxTree, TextBuffer};
 use nebula_protocol::{
-    BufferId, BufferSnapshot, DetectedTools, Event, ProtocolError, WorkspaceId, WorkspaceInfo,
+    BufferId, BufferSnapshot, DetectedTools, Event, ExecutableIdentity, ProtocolError,
+    WorkspaceId, WorkspaceInfo,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use tokio::sync::broadcast;
 
 /// 開いているワークスペース。
@@ -58,7 +60,15 @@ impl BufferEntry {
 /// 各サービスは独立に内部可変性を持つ。単一の巨大なロックにしないのは、
 /// 検索やターミナル出力のような長時間の処理が編集操作を待たせないようにするため。
 pub struct BackendState {
-    pub tools: DetectedTools,
+    /// 検出済みの外部ツール。構築時点では空のことがあり、検出完了時に
+    /// `apply_detected_tools` で差し替わる。`LspService`・`CodexService` も
+    /// この `Arc` を複製して持つので、差し替えは 1 箇所で全員に伝わる。
+    pub tools: SharedTools,
+    /// このプロセス自身の実行ファイルの同一性。起動時に 1 度だけ読み、以後は
+    /// 固定する。ハンドシェイクのたびに読み直すと、動作中に上書きされた
+    /// (再ビルドされた) 実行ファイルの新しい mtime/size を返してしまい、
+    /// 「古いバックエンドの生き残り」を検知できなくなる。
+    pub executable: ExecutableIdentity,
     pub events: broadcast::Sender<Event>,
     pub languages: Arc<LanguageRegistry>,
     workspaces: Mutex<HashMap<WorkspaceId, Workspace>>,
@@ -73,6 +83,13 @@ pub struct BackendState {
 
 impl BackendState {
     pub fn new(tools: DetectedTools) -> Arc<Self> {
+        // current_exe() の失敗は「自分が何者か分からない」という致命的な状況で、
+        // 実行ファイルが動作中に削除されたなど極めて例外的な場合しか起きない。
+        // 中途半端な既定値でごまかさず、ここで止める。
+        let executable = std::env::current_exe()
+            .and_then(|path| ExecutableIdentity::from_path(&path))
+            .expect("自分の実行ファイルの情報を読めません");
+        let tools: SharedTools = Arc::new(RwLock::new(tools));
         // 容量を大きめに取るのは、ターミナル出力の連続更新で購読側が
         // 一時的に遅れても Lagged による取りこぼしを起こしにくくするため。
         let (events, _) = broadcast::channel(4096);
@@ -86,6 +103,7 @@ impl BackendState {
             terminals: TerminalService::new(events.clone()),
             codex: CodexService::new(events.clone(), tools.clone()),
             watcher: WatchService::new(events.clone()),
+            executable,
             tools,
             events,
         })
@@ -94,6 +112,12 @@ impl BackendState {
     /// 全クライアントへイベントを配る。購読者が居なくても失敗扱いにしない。
     pub fn emit(&self, event: Event) {
         let _ = self.events.send(event);
+    }
+
+    /// 非同期に完了した検出結果を反映し、GUI へ通知する。
+    pub fn apply_detected_tools(&self, tools: DetectedTools) {
+        *self.tools.write().expect("検出結果のロック") = tools.clone();
+        self.emit(Event::ToolsDetected { tools });
     }
 
     pub fn workspaces(&self) -> MutexGuard<'_, HashMap<WorkspaceId, Workspace>> {
@@ -148,5 +172,31 @@ impl BackendState {
         self.watcher.shutdown();
         self.lsp.shutdown().await;
         self.codex.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 「先にソケットを開き、検出は非同期で行って結果をイベントで通知する」という
+    /// 設計の要。検出はバックエンド起動後にしか終わらないので、共有状態への反映と
+    /// GUI へのイベント通知の両方が確実に起きることをここで保証する。
+    #[test]
+    fn 検出結果の適用でイベントが流れて共有状態も変わる() {
+        let state = BackendState::new(DetectedTools::default());
+        let mut events = state.events.subscribe();
+
+        let detected = DetectedTools {
+            git: Some("git version 2.43.0".to_string()),
+            ..DetectedTools::default()
+        };
+        state.apply_detected_tools(detected.clone());
+
+        assert_eq!(*state.tools.read().expect("検出結果のロック"), detected);
+        match events.try_recv() {
+            Ok(Event::ToolsDetected { tools }) => assert_eq!(tools, detected),
+            other => panic!("Event::ToolsDetected が届かない: {other:?}"),
+        }
     }
 }

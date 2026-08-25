@@ -24,7 +24,8 @@ pub async fn handle(
                 protocol_version: PROTOCOL_VERSION,
                 backend_version: env!("CARGO_PKG_VERSION").to_string(),
                 pid: std::process::id(),
-                tools: state.tools.clone(),
+                executable: state.executable.clone(),
+                tools: state.tools.read().expect("検出結果のロック").clone(),
             }))
         }
         // `Shutdown` は接続層で処理されるため、ここには到達しない。

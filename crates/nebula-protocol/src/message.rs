@@ -486,6 +486,14 @@ pub enum Event {
 
     Codex(CodexEvent),
 
+    /// 外部ツールの検出が完了した。
+    ///
+    /// 検出はソケットを開いた後に非同期で走るため、ハンドシェイク応答の時点では
+    /// 空 (未検出) のことがある。GUI はこのイベントで確定値に差し替える。
+    ToolsDetected {
+        tools: DetectedTools,
+    },
+
     /// バックエンド側の致命的でない不具合。GUI は通知として出す。
     Notification {
         level: NotificationLevel,

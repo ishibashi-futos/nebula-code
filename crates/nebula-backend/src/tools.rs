@@ -1,18 +1,31 @@
 //! 外部ツールの検出。
 //!
 //! git / ripgrep / codex / 各言語サーバーは「あれば使う」方針。無い場合は該当機能を
-//! 無効化して GUI に伝え、起動そのものは妨げない。検出は起動直後に 1 回だけ行う。
+//! 無効化して GUI に伝え、起動そのものは妨げない。検出は起動直後に 1 回だけ行うが、
+//! ソケットを開く前には待たない。`main` がソケットを開いた **後** に `tokio::spawn`
+//! で切り離して走らせ、完了したら `Event::ToolsDetected` で結果を届ける
+//! (`BackendState::apply_detected_tools`)。GUI からの最初の接続を検出の遅さで
+//! 待たせないため。
 
 use nebula_protocol::DetectedTools;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::process::Command;
 
+/// 検出結果の共有ハンドル。
+///
+/// `BackendState` 本体と `LspService`・`CodexService` の 3 箇所が同じ実体を持つ。
+/// 検出はソケットを開いた後に完了するため、値渡しの複製ではなく共有可変にしないと
+/// 検出完了後の結果が構築時に複製済みのコピーへ反映されない。
+pub type SharedTools = Arc<RwLock<DetectedTools>>;
+
 /// 1 ツールの検出に許す時間。
 ///
-/// 検出はソケットを開く前に走るので、応答しないツールが 1 つあると
-/// バックエンドが待ち受けを始められない。打ち切って「無し」として先へ進む。
+/// 検出はソケットを開いた後に非同期で走るので、この値は「待ち受け開始までの遅延」
+/// には効かない。それでも打ち切るのは、応答しないツールをいつまでも待ち続けると
+/// `DetectedTools` がいつまでも埋まらず、GUI が「検出中」のまま止まって見えるため。
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// `PATH` から実行ファイルを探す。

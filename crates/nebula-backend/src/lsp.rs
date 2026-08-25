@@ -20,12 +20,13 @@ mod framing;
 mod offset;
 mod uri;
 
+use crate::tools::SharedTools;
 use client::{Client, Incoming};
 use lsp_types as lsp;
 use nebula_protocol::{
-    CodeAction, CompletionItem, DetectedTools, Event, HoverInfo, LocationLink, LspServerState,
-    LspServerStatus, Position, ProtocolError, ProtocolErrorKind, SignatureHelp, SpanRange,
-    SymbolInfo, TextEditOp, WorkspaceEdit, WorkspaceId,
+    CodeAction, CompletionItem, Event, HoverInfo, LocationLink, LspServerState, LspServerStatus,
+    Position, ProtocolError, ProtocolErrorKind, SignatureHelp, SpanRange, SymbolInfo, TextEditOp,
+    WorkspaceEdit, WorkspaceId,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -101,12 +102,14 @@ pub struct LspService {
     /// 複数のバッファを同時に開くと `ensure_server` が並行で走る。この関門が無いと
     /// 同じ言語サーバーを何プロセスも立ち上げてしまう。
     startup: tokio::sync::Mutex<()>,
-    /// 起動時に検出したツール。
+    /// 検出したツール。`BackendState`・`CodexService` と共有する同じ実体。
     ///
-    /// 未インストール判定にはこれを使わず、実際の spawn 失敗を見る。検出は起動時の
-    /// 1 回きりなので、後から入れた言語サーバーを永久に無いものと扱ってしまうため。
+    /// 未インストール判定にはこれを使わず、実際の spawn 失敗を見る。検出結果は
+    /// 後から (非同期に、あるいは環境の変化で) 更新されうるので、ここで一度
+    /// 「無い」と判定して固定してしまうと、後から入れた言語サーバーを永久に
+    /// 無いものと扱ってしまうため。
     #[allow(dead_code)]
-    tools: DetectedTools,
+    tools: SharedTools,
 }
 
 /// 非同期タスクと共有する状態。
@@ -149,7 +152,7 @@ enum DocumentSync {
 }
 
 impl LspService {
-    pub fn new(events: broadcast::Sender<Event>, tools: DetectedTools) -> Self {
+    pub fn new(events: broadcast::Sender<Event>, tools: SharedTools) -> Self {
         Self {
             inner: Arc::new(Inner {
                 events,
@@ -1173,6 +1176,10 @@ fn empty_result(method: &str, params: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 検出結果を共有可変にした `SharedTools` を組み立てるのに使う。本体側では
+    // `SharedTools` (型エイリアス) だけを扱うので、テストでのみ必要になる。
+    use nebula_protocol::DetectedTools;
+    use std::sync::RwLock;
 
     #[test]
     fn 言語_id_から起動コマンドを引ける() {
@@ -1298,7 +1305,7 @@ mod tests {
     #[tokio::test]
     async fn 未対応言語のサーバー起動は成功扱いになる() {
         let (events, _rx) = broadcast::channel(16);
-        let service = LspService::new(events, DetectedTools::default());
+        let service = LspService::new(events, Arc::new(RwLock::new(DetectedTools::default())));
         // 対応表に無い言語でエラーを返すと、その言語のファイルが開けなくなる。
         assert!(
             service
@@ -1312,7 +1319,7 @@ mod tests {
     #[tokio::test]
     async fn サーバーが居なければ問い合わせは空を返す() {
         let (events, _rx) = broadcast::channel(16);
-        let service = LspService::new(events, DetectedTools::default());
+        let service = LspService::new(events, Arc::new(RwLock::new(DetectedTools::default())));
         let path = Path::new("/tmp/nebula-lsp-test/a.rs");
         assert_eq!(service.hover(path, "fn main() {}", Position::new(0, 3)).await.unwrap(), None);
         assert!(
@@ -1334,7 +1341,7 @@ mod tests {
     #[tokio::test]
     async fn 起動を試みた言語は状態表に載り_イベントが流れる() {
         let (events, mut rx) = broadcast::channel(16);
-        let service = LspService::new(events, DetectedTools::default());
+        let service = LspService::new(events, Arc::new(RwLock::new(DetectedTools::default())));
         // pyright-langserver の有無で最終状態 (Running / NotInstalled) は変わるが、
         // どちらでも「状態が記録され GUI へ通知される」ことは変わらない。
         let _ = service.ensure_server(Path::new("/tmp"), "python").await;

@@ -282,6 +282,10 @@ impl NebulaApp {
             Event::Codex(_) => {
                 self.codex.update(cx, |v, cx| v.handle_event(&event, cx));
             }
+            Event::ToolsDetected { tools } => {
+                self.tools = tools;
+                cx.notify();
+            }
             Event::Notification { level, ref message } => {
                 self.notify_status(level, message.clone(), cx);
             }

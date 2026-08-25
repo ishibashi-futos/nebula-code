@@ -22,6 +22,10 @@ serde_json.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 
+# 古いバックエンドの終了 (SIGTERM) と、シグナルマスク/ハンドラの初期化に使う。
+# std に相当する API が無い。
+libc.workspace = true
+
 # gpui が内部で使っている非同期ランタイム。GUI プロセスに 2 つ目のランタイムを
 # 持ち込まないために、IPC の非同期チャネルも smol のものを使う。
 smol = "2"

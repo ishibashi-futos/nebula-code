@@ -4,7 +4,8 @@
 //! GUI 側にそれらのクレートを持ち込まないことが目的で、GUI プロセスを軽く保つ設計の一部。
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 // ---------------------------------------------------------------------------
 // テキスト位置
@@ -745,12 +746,41 @@ pub enum CodexSandboxPolicy {
 // バックエンドの健全性
 // ---------------------------------------------------------------------------
 
+/// 実行ファイルの同一性。パス・更新時刻・サイズの組で「同じビルドか」を判定する。
+///
+/// git のコミットハッシュではなくこの 3 つを使うのは、開発中の典型的な再ビルドが
+/// 「HEAD は変えずワーキングツリーだけ変える」形で起きるため。コミットは変わらない
+/// ままバイナリだけが更新されるので、コミットハッシュでは検知できない。
+/// cargo は実際に内容が変わったときだけ実行ファイルを書き直すので、
+/// (path, mtime, size) が一致していれば同じビルドとみなしてよい。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutableIdentity {
+    pub path: PathBuf,
+    pub mtime: SystemTime,
+    pub size: u64,
+}
+
+impl ExecutableIdentity {
+    /// 指定した実行ファイルの現在の同一性情報を読む。
+    pub fn from_path(path: &Path) -> std::io::Result<Self> {
+        let metadata = std::fs::metadata(path)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            mtime: metadata.modified()?,
+            size: metadata.len(),
+        })
+    }
+}
+
 /// ハンドシェイクの応答。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandshakeInfo {
     pub protocol_version: u32,
     pub backend_version: String,
     pub pid: u32,
+    /// このバックエンドを起動している実行ファイルの同一性。GUI は自分がこれから
+    /// 起動するはずの実行ファイルと突き合わせ、古いビルドの生き残りを検知する。
+    pub executable: ExecutableIdentity,
     /// 外部ツールの検出結果。GUI は機能の出し分けに使う。
     pub tools: DetectedTools,
 }
