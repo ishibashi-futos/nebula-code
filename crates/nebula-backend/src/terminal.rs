@@ -9,6 +9,10 @@
 //!   `read` にはタイムアウトが無いので、tokio のタスクに載せると実行枠を占有してしまう。
 //! - 送出スレッド: 16ms 周期で差分を取り出して送る。読み取りのたびに送ると、
 //!   1 バイトずつ届く対話入力で IPC が溢れてエディタが止まる。
+//!
+//! シェルを明示指定されていないときは、一般的な端末エミュレータと同じくログインシェル
+//! として起動する。そうしないとログインシェル用の設定 (zsh なら `.zprofile` / `.zlogin`)
+//! が読まれず、プロンプトやパスの設定が反映されない。
 
 mod grid;
 
@@ -24,9 +28,6 @@ use tokio::sync::broadcast;
 
 /// GUI へ差分を送る間隔。60Hz 相当。
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
-
-/// `$SHELL` も指定も無い環境で使う既定のシェル。
-const FALLBACK_SHELL: &str = "/bin/zsh";
 
 /// 起動中の PTY セッション 1 つ。
 struct Session {
@@ -212,14 +213,18 @@ const fn pty_size(rows: u16, cols: u16) -> PtySize {
 }
 
 fn build_command(spec: &TerminalSpec) -> CommandBuilder {
-    let shell = spec
-        .shell
-        .clone()
-        .or_else(|| std::env::var("SHELL").ok().filter(|s| !s.is_empty()))
-        .unwrap_or_else(|| FALLBACK_SHELL.to_string());
-
-    let mut cmd = CommandBuilder::new(shell);
-    cmd.args(&spec.args);
+    // 指定が無ければ既定のシェルに任せる。argv[0] が `-zsh` の形になりログインシェルとして
+    // 起動するので、ユーザーの `.zprofile` が読まれる。シェルの決定 (`$SHELL` → passwd db) も
+    // portable-pty 側が行うため、こちらでフォールバックを持たない。
+    let mut cmd = match &spec.shell {
+        Some(shell) => {
+            let mut cmd = CommandBuilder::new(shell);
+            cmd.args(&spec.args);
+            cmd
+        }
+        // 既定シェルのビルダーには引数を足せない。GUI からの通常起動は引数を渡さない。
+        None => CommandBuilder::new_default_prog(),
+    };
     if let Some(cwd) = &spec.cwd {
         cmd.cwd(cwd);
     }
@@ -327,16 +332,17 @@ mod tests {
     }
 
     #[test]
-    fn 起動するシェルの決め方() {
+    fn 明示指定が無ければログインシェルとして起動する() {
         let explicit = build_command(&spec("/bin/sh", &["-c", "true"]));
         assert_eq!(explicit.get_argv()[0], "/bin/sh");
         assert_eq!(explicit.get_env("TERM").unwrap(), "xterm-256color");
 
         let mut inherited = spec("", &[]);
         inherited.shell = None;
-        let shell = build_command(&inherited).get_argv()[0].clone();
-        let expected = std::env::var("SHELL").unwrap_or_else(|_| FALLBACK_SHELL.to_string());
-        assert_eq!(shell, expected.as_str());
+        let inherited = build_command(&inherited);
+        // 既定シェルのビルダーは argv を持たず、起動時に `-zsh` の形へ組み立てられる。
+        assert!(inherited.is_default_prog());
+        assert_eq!(inherited.get_env("TERM").unwrap(), "xterm-256color");
     }
 
     #[test]

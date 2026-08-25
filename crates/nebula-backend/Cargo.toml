@@ -28,5 +28,6 @@ notify.workspace = true
 ignore.workspace = true
 lsp-types.workspace = true
 portable-pty.workspace = true
+libc.workspace = true
 vte.workspace = true
 unicode-width.workspace = true

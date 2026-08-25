@@ -300,6 +300,11 @@ pub mod metrics {
     /// エディタ行番号ガターの幅の下限。
     pub const GUTTER_MIN_WIDTH: Pixels = px(52.);
     pub const EDITOR_FONT_SIZE: Pixels = px(13.);
+    /// 等幅で描く面 (ターミナル・コードブロック) の書体。
+    ///
+    /// "SF Mono" はファミリ名として解決できず、プロポーショナル書体へフォールバックして
+    /// 桁位置がずれるため使わない。Menlo は macOS に必ず同梱されている等幅書体。
+    pub const MONO_FONT_FAMILY: &str = "Menlo";
     pub const UI_FONT_SIZE: Pixels = px(12.5);
     pub const LINE_HEIGHT_RATIO: f32 = 1.55;
 }

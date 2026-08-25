@@ -590,8 +590,10 @@ pub struct TerminalUpdate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalSpec {
     pub workspace: WorkspaceId,
-    /// 起動するシェル。`None` なら `$SHELL` を使う。
+    /// 起動するシェル。`None` なら既定のシェルをログインシェルとして起動する。
     pub shell: Option<String>,
+    /// シェルへ渡す引数。`shell` が `None` のときは使わない
+    /// (既定のシェルはログインシェルとして起動するため引数を取らない)。
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,

@@ -30,10 +30,8 @@ use nebula_protocol::{
 };
 use std::path::PathBuf;
 
-/// 等幅で出すブロックの書体。
-///
-/// theme.rs は色と寸法だけを持つ約束なので、書体はこのビューに置く。
-const MONO_FONT: &str = "SF Mono";
+/// 等幅で出すブロックの書体。書体名は theme.rs の metrics に集約してある。
+const MONO_FONT: &str = metrics::MONO_FONT_FAMILY;
 /// 入力欄が伸びる上限 (折り返し後の行数)。これを超えたぶんはカーソル追従でスクロールする。
 const MAX_INPUT_ROWS: usize = 8;
 

@@ -3307,6 +3307,7 @@ name = "nebula-backend"
 version = "0.1.0"
 dependencies = [
  "ignore",
+ "libc",
  "lsp-types",
  "nebula-core",
  "nebula-protocol",

@@ -6,8 +6,11 @@
 //!
 //! 描画は `div` を並べずカスタム [`Element`] で行う。80x24 のグリッドを
 //! `div` でセルごとに組むと 1920 要素になり、レイアウトだけで 1 フレームを
-//! 使い切ってしまう。ここでは 1 行を 1 回の `shape_line` に畳み、
-//! 背景と枠だけを矩形として描く。
+//! 使い切ってしまう。ここでは 1 行を「同じ見た目が続く区間」へ畳んで
+//! 区間ごとに `shape_line` し、背景と枠だけを矩形として描く。
+//!
+//! 区間には **開始桁** を持たせ、`cell_width * 桁` に置く。字送りに桁位置を
+//! 任せると、全角やフォールバック書体が混ざった時点で文字とカーソル矩形がずれる。
 
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
@@ -513,7 +516,7 @@ impl Render for TerminalView {
                 .overflow_hidden()
                 .bg(theme.bg_surface)
                 // 等幅前提。桁の位置を 1 文字幅の整数倍で決めている。
-                .font_family("SF Mono")
+                .font_family(metrics::MONO_FONT_FAMILY)
                 .text_size(metrics::EDITOR_FONT_SIZE)
                 .text_color(theme.text)
                 .child(TerminalElement {
@@ -643,17 +646,23 @@ impl Element for TerminalElement {
                 }
 
                 let inverse_col = inverse_cell.and_then(|(r, c)| (r == row).then_some(c));
-                let (text, runs) = build_row(cells, &theme, &base_font, inverse_col);
-                if text.is_empty() {
-                    continue;
+                for RowSegment {
+                    start_col,
+                    text,
+                    run,
+                } in build_row(cells, &theme, &base_font, inverse_col)
+                {
+                    let shaped = window.text_system().shape_line(
+                        SharedString::from(text),
+                        font_size,
+                        &[run],
+                        None,
+                    );
+                    lines.push((
+                        shaped,
+                        point(bounds.origin.x + cell_width * start_col as f32, y),
+                    ));
                 }
-                let shaped = window.text_system().shape_line(
-                    SharedString::from(text),
-                    font_size,
-                    &runs,
-                    None,
-                );
-                lines.push((shaped, point(bounds.origin.x, y)));
             }
 
             if state.cursor_visible {
@@ -837,20 +846,32 @@ fn visible_len(cells: &[TerminalCell]) -> usize {
         .unwrap_or(0)
 }
 
-/// 1 行ぶんの表示文字列とテキストランを組み立てる。
+/// 1 行を桁位置つきの描画区間へ分割したうちの 1 つ。
 ///
-/// `TextRun::len` は **バイト数**。同じ色・同じ装飾が続くセルは 1 ランに畳む。
+/// 開始桁を持つので、描画側は `cell_width * start_col` に置くだけでよい。
+/// 見た目が変わる位置と全角セルで区間を切るため、区間の中身は常に 1 ラン。
+struct RowSegment {
+    /// この区間が始まる桁。
+    start_col: usize,
+    text: String,
+    run: TextRun,
+}
+
+/// 1 行ぶんの描画区間を組み立てる。
+///
+/// `TextRun::len` は **バイト数**。同じ色・同じ装飾が続くセルは 1 区間に畳み、
+/// 見た目が変わる位置と全角セルの前後で切る。全角セルを単独の区間にするのは、
+/// 代替書体で描かれたときの送り幅が 2 桁ぶんと一致する保証が無いため。
 /// `inverse_col` にはカーソルが乗っている桁を渡す。その桁だけ反転色で描く。
 fn build_row(
     cells: &[TerminalCell],
     theme: &Theme,
     base_font: &Font,
     inverse_col: Option<usize>,
-) -> (String, Vec<TextRun>) {
+) -> Vec<RowSegment> {
     let end = visible_len(cells);
-    let mut text = String::new();
-    let mut runs: Vec<TextRun> = Vec::new();
-    let mut current: Option<(RunStyle, usize)> = None;
+    let mut segments: Vec<RowSegment> = Vec::new();
+    let mut current: Option<SegmentBuilder> = None;
 
     for (col, cell) in cells.iter().enumerate().take(end) {
         // 全角の後続セルには文字が無い。読み飛ばさないと桁がずれる。
@@ -871,21 +892,65 @@ fn build_row(
         };
         // 制御文字がそのまま届いた場合に備えて空白へ落とす。
         let ch = if cell.ch.is_control() { ' ' } else { cell.ch };
-        text.push(ch);
-        let byte_len = ch.len_utf8();
-        current = match current {
-            Some((run_style, len)) if run_style == style => Some((run_style, len + byte_len)),
-            Some((run_style, len)) => {
-                runs.push(make_run(&run_style, len, base_font));
-                Some((style, byte_len))
-            }
-            None => Some((style, byte_len)),
-        };
+        let wide = cells
+            .get(col + 1)
+            .is_some_and(|next| next.flags & cell_flags::WIDE_TRAILER != 0);
+
+        // 見た目が同じあいだは畳む。空白が続くだけの区間も同じ扱い。
+        // 全角セルは前後で切るので、畳んでいるあいだ桁は必ず 1 つずつ進む。
+        if !wide
+            && let Some(builder) = current.as_mut()
+            && builder.style == style
+        {
+            builder.push(ch);
+            continue;
+        }
+
+        if let Some(builder) = current.take() {
+            segments.push(builder.build(base_font));
+        }
+        let mut builder = SegmentBuilder::new(col, style);
+        builder.push(ch);
+        if wide {
+            segments.push(builder.build(base_font));
+        } else {
+            current = Some(builder);
+        }
     }
-    if let Some((style, len)) = current {
-        runs.push(make_run(&style, len, base_font));
+    if let Some(builder) = current {
+        segments.push(builder.build(base_font));
     }
-    (text, runs)
+    segments
+}
+
+/// 組み立て中の区間。
+struct SegmentBuilder {
+    start_col: usize,
+    style: RunStyle,
+    text: String,
+}
+
+impl SegmentBuilder {
+    fn new(start_col: usize, style: RunStyle) -> Self {
+        Self {
+            start_col,
+            style,
+            text: String::new(),
+        }
+    }
+
+    fn push(&mut self, ch: char) {
+        self.text.push(ch);
+    }
+
+    fn build(self, base_font: &Font) -> RowSegment {
+        let run = make_run(&self.style, self.text.len(), base_font);
+        RowSegment {
+            start_col: self.start_col,
+            text: self.text,
+            run,
+        }
+    }
 }
 
 /// 1 ランぶんの見た目。同値なら畳めるかどうかの判定に使う。
@@ -1240,71 +1305,119 @@ mod tests {
         assert_eq!(visible_len(&[cell(' '), cell(' ')]), 0);
     }
 
+    fn wide_trailer() -> TerminalCell {
+        TerminalCell {
+            ch: ' ',
+            flags: cell_flags::WIDE_TRAILER,
+            ..TerminalCell::default()
+        }
+    }
+
     #[test]
-    fn 同色のセルが_1_ランに畳まれる() {
+    fn 同色のセルが_1_区間に畳まれる() {
         let theme = Theme::cyber_cosmic();
-        let font = gpui::font("SF Mono");
+        let font = gpui::font(metrics::MONO_FONT_FAMILY);
         let cells = vec![
             colored('a', TermColor::Indexed(2)),
             colored('b', TermColor::Indexed(2)),
             colored('c', TermColor::Indexed(5)),
         ];
-        let (text, runs) = build_row(&cells, &theme, &font, None);
-        assert_eq!(text, "abc");
-        assert_eq!(runs.len(), 2, "色が変わるところでだけランが切れる");
-        assert_eq!(runs[0].len, 2);
-        assert_eq!(runs[1].len, 1);
+        let segments = build_row(&cells, &theme, &font, None);
+        assert_eq!(segments.len(), 2, "色が変わるところでだけ区間が切れる");
+        assert_eq!(
+            (segments[0].start_col, segments[0].text.as_str()),
+            (0, "ab")
+        );
+        assert_eq!(
+            (segments[1].start_col, segments[1].text.as_str()),
+            (2, "c"),
+            "2 つ目の区間は色が変わった桁から始まる"
+        );
     }
 
     #[test]
-    fn ラン長の合計はバイト数に一致する() {
+    fn 連続する空白は区間を増やさない() {
         let theme = Theme::cyber_cosmic();
-        let font = gpui::font("SF Mono");
-        let cells = vec![cell('あ'), cell('a'), colored('い', TermColor::Indexed(4))];
-        let (text, runs) = build_row(&cells, &theme, &font, None);
-        let total: usize = runs.iter().map(|r| r.len).sum();
-        assert_eq!(total, text.len());
-        assert_eq!(text.len(), 7, "3+1+3 バイト");
+        let font = gpui::font(metrics::MONO_FONT_FAMILY);
+        let cells = vec![cell('a'), cell(' '), cell(' '), cell('b')];
+        let segments = build_row(&cells, &theme, &font, None);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(
+            (segments[0].start_col, segments[0].text.as_str()),
+            (0, "a  b")
+        );
     }
 
     #[test]
-    fn 全角の後続セルは読み飛ばす() {
+    fn 区間のラン長は文字列のバイト数に一致する() {
         let theme = Theme::cyber_cosmic();
-        let font = gpui::font("SF Mono");
-        let trailer = TerminalCell {
-            ch: ' ',
-            flags: cell_flags::WIDE_TRAILER,
-            ..TerminalCell::default()
-        };
-        let cells = vec![cell('あ'), trailer, cell('x')];
-        let (text, _) = build_row(&cells, &theme, &font, None);
-        assert_eq!(text, "あx");
+        let font = gpui::font(metrics::MONO_FONT_FAMILY);
+        let cells = vec![
+            cell('あ'),
+            wide_trailer(),
+            cell('a'),
+            colored('い', TermColor::Indexed(4)),
+            wide_trailer(),
+        ];
+        let segments = build_row(&cells, &theme, &font, None);
+        for segment in &segments {
+            assert_eq!(
+                segment.run.len,
+                segment.text.len(),
+                "{} の区間",
+                segment.start_col
+            );
+        }
+        let total: usize = segments.iter().map(|s| s.text.len()).sum();
+        assert_eq!(total, 7, "3+1+3 バイト");
+    }
+
+    #[test]
+    fn 全角セルは単独の区間になり次の区間は_2_桁進む() {
+        let theme = Theme::cyber_cosmic();
+        let font = gpui::font(metrics::MONO_FONT_FAMILY);
+        let cells = vec![cell('a'), cell('あ'), wide_trailer(), cell('x'), cell('y')];
+        let segments = build_row(&cells, &theme, &font, None);
+        assert_eq!(segments.len(), 3);
+        assert_eq!((segments[0].start_col, segments[0].text.as_str()), (0, "a"));
+        assert_eq!(
+            (segments[1].start_col, segments[1].text.as_str()),
+            (1, "あ"),
+            "全角セルは前後から切り離す"
+        );
+        assert_eq!(
+            (segments[2].start_col, segments[2].text.as_str()),
+            (3, "xy"),
+            "WIDE_TRAILER を読み飛ばしても桁は 2 つ進む"
+        );
     }
 
     #[test]
     fn カーソル下の文字は反転色で描く() {
         let theme = Theme::cyber_cosmic();
-        let font = gpui::font("SF Mono");
+        let font = gpui::font(metrics::MONO_FONT_FAMILY);
         let cells = vec![cell('a'), cell('b'), cell('c')];
-        let (_, runs) = build_row(&cells, &theme, &font, Some(1));
-        assert_eq!(runs.len(), 3);
-        assert_eq!(runs[1].color, theme.text_inverse);
-        assert_ne!(runs[0].color, theme.text_inverse);
+        let segments = build_row(&cells, &theme, &font, Some(1));
+        assert_eq!(segments.len(), 3, "カーソル桁だけ色が変わるので区間が 3 つ");
+        assert_eq!((segments[1].start_col, segments[1].text.as_str()), (1, "b"));
+        assert_eq!(segments[1].run.color, theme.text_inverse);
+        assert_ne!(segments[0].run.color, theme.text_inverse);
+        assert_ne!(segments[2].run.color, theme.text_inverse);
     }
 
     #[test]
     fn 装飾フラグがランに反映される() {
         let theme = Theme::cyber_cosmic();
-        let font = gpui::font("SF Mono");
+        let font = gpui::font(metrics::MONO_FONT_FAMILY);
         let decorated = TerminalCell {
             ch: 'x',
             flags: cell_flags::BOLD | cell_flags::UNDERLINE | cell_flags::STRIKETHROUGH,
             ..TerminalCell::default()
         };
-        let (_, runs) = build_row(&[decorated], &theme, &font, None);
-        assert_eq!(runs[0].font.weight, FontWeight::BOLD);
-        assert!(runs[0].underline.is_some());
-        assert!(runs[0].strikethrough.is_some());
+        let segments = build_row(&[decorated], &theme, &font, None);
+        assert_eq!(segments[0].run.font.weight, FontWeight::BOLD);
+        assert!(segments[0].run.underline.is_some());
+        assert!(segments[0].run.strikethrough.is_some());
     }
 
     // -- タブ --

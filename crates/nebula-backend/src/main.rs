@@ -6,6 +6,7 @@ use nebula_backend::{BackendState, ipc, tools};
 use std::path::PathBuf;
 
 fn main() -> std::process::ExitCode {
+    reset_signal_state();
     let socket_path = parse_socket_arg().unwrap_or_else(nebula_protocol::default_socket_path);
 
     // ワーカースレッド数を絞る。バックエンドの仕事は I/O 待ちが主体で、
@@ -33,6 +34,27 @@ fn main() -> std::process::ExitCode {
             }
         }
     })
+}
+
+/// GUI から受け継いだシグナルの状態を既定へ戻す。
+///
+/// シグナルマスクと「無視 (SIG_IGN)」の設定は `exec` を越えて子へ引き継がれる。
+/// GUI プロセスはこれらを止めた状態でバックエンドを起動するため、そのままだと
+/// **SIGCHLD が届かない**。tokio が終了した子プロセスを回収できず、外部ツールの
+/// 検出 (`tools::detect_all`) が永久に終わらないので、ソケットを開く前に停止する。
+/// GUI 側からは「バックエンドに接続できませんでした」に見える。
+/// 同時に SIGTERM も届かなくなり、`pkill` で止められないプロセスが残る。
+fn reset_signal_state() {
+    // SAFETY: 他のスレッドを作る前の main 先頭でのみ呼ぶ。ここで設定した
+    // マスクは以降に作られる全スレッドへ引き継がれる。
+    unsafe {
+        let mut empty = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        if libc::sigemptyset(empty.as_mut_ptr()) == 0 {
+            libc::pthread_sigmask(libc::SIG_SETMASK, empty.as_ptr(), std::ptr::null_mut());
+        }
+        libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+    }
 }
 
 fn parse_socket_arg() -> Option<PathBuf> {
