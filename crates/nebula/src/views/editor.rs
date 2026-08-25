@@ -137,6 +137,11 @@ impl EditorArea {
                             let version = *version;
                             tab.view
                                 .update(cx, |view, cx| view.reload(&text, version, cx));
+                            // reload は EditorViewEvent::Dirtied を出さない (自分自身への
+                            // notify だけ) ので、on_editor_event 側の転送に乗れない。
+                            // ディスク上の変更 (他プロセスでの編集・git checkout など) で
+                            // プレビューが古いまま固まらないよう、ここでも明示的に notify する。
+                            tab.preview.update(cx, |_, cx| cx.notify());
                         }
                     }
                 }
