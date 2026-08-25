@@ -147,6 +147,8 @@ pub struct TerminalView {
     selecting: bool,
     /// 右クリックメニューを開いている位置 (ウィンドウ座標)。
     context_menu: Option<Point<Pixels>>,
+    /// 下部パネルでターミナルが表示されているか。自動起動の門番に使う。
+    panel_visible: bool,
 }
 
 impl TerminalView {
@@ -165,6 +167,19 @@ impl TerminalView {
             selection: None,
             selecting: false,
             context_menu: None,
+            panel_visible: false,
+        }
+    }
+
+    /// 下部パネルでターミナルが実際に表示されているかを伝える。
+    ///
+    /// 自動起動をこの状態で門番するために要る。接続とワークスペースが揃った
+    /// だけで起動してしまうと、ターミナルを一度も開かない利用者の裏でシェルが
+    /// 常駐することになる (issue は「ターミナルを開いたとき」に起動せよと言っている)。
+    pub fn set_panel_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        self.panel_visible = visible;
+        if visible {
+            self.ensure_terminal(cx);
         }
     }
 
@@ -270,6 +285,7 @@ impl TerminalView {
             !self.order.is_empty(),
             self.client.is_some(),
             self.workspace.is_some(),
+            self.panel_visible,
         ) {
             self.create_terminal(cx);
         }
@@ -1405,8 +1421,9 @@ fn should_auto_launch_terminal(
     has_tabs: bool,
     has_client: bool,
     has_workspace: bool,
+    panel_visible: bool,
 ) -> bool {
-    !creating && !has_tabs && has_client && has_workspace
+    !creating && !has_tabs && has_client && has_workspace && panel_visible
 }
 
 /// macOS の作法で Cmd+C (コピー) か。
@@ -2018,28 +2035,35 @@ mod tests {
 
     #[test]
     fn 起動処理中は自動起動しない() {
-        assert!(!should_auto_launch_terminal(true, false, true, true));
+        assert!(!should_auto_launch_terminal(true, false, true, true, true));
     }
 
     #[test]
     fn 既存タブがあれば自動起動しない() {
         // exited のまま残っているタブも「既存タブ」に含める。でないと落ちる
         // コマンドを打つたびに際限なく再起動してしまう。
-        assert!(!should_auto_launch_terminal(false, true, true, true));
+        assert!(!should_auto_launch_terminal(false, true, true, true, true));
     }
 
     #[test]
     fn バックエンドへ未接続なら自動起動しない() {
-        assert!(!should_auto_launch_terminal(false, false, false, true));
+        assert!(!should_auto_launch_terminal(false, false, false, true, true));
     }
 
     #[test]
     fn 作業フォルダがまだ無ければ自動起動しない() {
-        assert!(!should_auto_launch_terminal(false, false, true, false));
+        assert!(!should_auto_launch_terminal(false, false, true, false, true));
     }
 
     #[test]
     fn 起動処理中でなく既存タブも無く準備が整っていれば自動起動する() {
-        assert!(should_auto_launch_terminal(false, false, true, true));
+        assert!(should_auto_launch_terminal(false, false, true, true, true));
+    }
+
+    /// 「ターミナルを開いたとき」に起動するのが issue の要求。接続とワークスペースが
+    /// 揃っただけで起動すると、パネルを一度も開かない利用者の裏でシェルが常駐する。
+    #[test]
+    fn パネルが表示されていなければ自動起動しない() {
+        assert!(!should_auto_launch_terminal(false, false, true, true, false));
     }
 }

@@ -770,8 +770,10 @@ impl CommandPalette {
         } else {
             theme.text_muted
         };
+        // gap は張らない。h_flex に gap を張るとコロンの前後**両方**に隙間が入り
+        // "Terminal : ターミナルを開く" と間延びして見える。コロンは英語名に密着させ、
+        // 日本語名との間だけを右マージンで空ける。
         let label = h_flex()
-            .gap(px(4.))
             .child(self.render_highlighted(
                 command.english,
                 &english_positions,
@@ -783,6 +785,7 @@ impl CommandPalette {
                 div()
                     .text_size(px(13.))
                     .text_color(theme.text_faint)
+                    .mr(px(4.))
                     .child(":"),
             )
             .child(self.render_highlighted(

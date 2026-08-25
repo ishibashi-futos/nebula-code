@@ -595,9 +595,12 @@ impl NebulaApp {
     /// 初めてパネルを開くケースがあり、そちらを取りこぼすと「＋」も出ない
     /// 空のパネルが残ってしまう。
     fn ensure_terminal_launched(&mut self, cx: &mut Context<Self>) {
-        if self.panel_visible && self.panel == PanelTab::Terminal {
-            self.terminal.update(cx, |v, cx| v.ensure_terminal(cx));
-        }
+        // 表示状態は必ず TerminalView へ伝える。伝えないと、接続とワークスペースが
+        // 後から揃ったときに TerminalView 側が単独で起動判断をしてしまい、
+        // パネルを一度も開いていない利用者の裏でシェルが常駐する。
+        let visible = self.panel_visible && self.panel == PanelTab::Terminal;
+        self.terminal
+            .update(cx, |v, cx| v.set_panel_visible(visible, cx));
     }
 
     // -- アクション --
