@@ -9,7 +9,7 @@
 
 use crate::actions::*;
 use crate::ipc_client::BackendClient;
-use crate::theme::theme;
+use crate::theme::{metrics, theme};
 use crate::ui::{h_flex, v_flex};
 use crate::views::editor_element::{EditorElement, EditorLayoutInfo};
 use gpui::prelude::*;
@@ -1887,6 +1887,9 @@ impl Render for EditorView {
             .size_full()
             .relative()
             .overflow_hidden()
+            // Workspace ルートの "SF Pro Text" (プロポーショナル体) をそのまま継承すると
+            // コードが可変幅で描かれてしまうため、ここで等幅書体を明示する。
+            .font_family(metrics::MONO_FONT_FAMILY)
             .on_action(cx.listener(Self::on_move_left))
             .on_action(cx.listener(Self::on_move_right))
             .on_action(cx.listener(Self::on_move_up))

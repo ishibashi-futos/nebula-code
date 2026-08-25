@@ -6,7 +6,7 @@
 * [ ] ターミナル上のコピー・ペースト機能を追加（右クリックでコンテキストメニュー表示なども）
 * [ ] `nebura update` によるSelf Update機構の追加(reference: `bake update` https://github.com/ishibashi-futos/overbake)
 * [ ] `.git`, `.gitignore` 等の隠しフォルダ非表示、再表示機能
-* [ ] `JetBrains Mono` の組み込み・デフォルト化
+* [x] `JetBrains Mono` の組み込み・デフォルト化
 * [ ] Markdownファイル記述支援機構の追加（箇条書き、チェックリスト改行時自動作成、見出しのハイライトなど）
 * [ ] Markdownファイルプレビュー機能の追加
 * [ ] gitの差分有無がエクスプローラーからも確認できて欲しい

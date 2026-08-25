@@ -300,11 +300,13 @@ pub mod metrics {
     /// エディタ行番号ガターの幅の下限。
     pub const GUTTER_MIN_WIDTH: Pixels = px(52.);
     pub const EDITOR_FONT_SIZE: Pixels = px(13.);
-    /// 等幅で描く面 (ターミナル・コードブロック) の書体。
+    /// 等幅で描く面 (エディタ本体・ターミナル・コードブロック) の書体。
     ///
     /// "SF Mono" はファミリ名として解決できず、プロポーショナル書体へフォールバックして
-    /// 桁位置がずれるため使わない。Menlo は macOS に必ず同梱されている等幅書体。
-    pub const MONO_FONT_FAMILY: &str = "Menlo";
+    /// 桁位置がずれるため使わない。JetBrains Mono をバイナリに埋め込み、
+    /// `main.rs` で `TextSystem::add_fonts` に登録して OS 非依存にしている
+    /// (この文字列は TTF 内部のファミリ名 (nameID 1) と一致させる必要がある)。
+    pub const MONO_FONT_FAMILY: &str = "JetBrains Mono";
     pub const UI_FONT_SIZE: Pixels = px(12.5);
     pub const LINE_HEIGHT_RATIO: f32 = 1.55;
 }
