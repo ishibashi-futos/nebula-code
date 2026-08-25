@@ -1054,6 +1054,50 @@ mod tests {
         assert_eq!(resolve_asset_name("nebula", "linux", "aarch64"), None);
     }
 
+    /// リリース CI が作る配布名と、`resolve_asset_name` が探しに行く名前が
+    /// 一致していることを、ワークフローを実際に読んで確かめる。
+    ///
+    /// この 2 つは文字列で完全一致していないと `nebula update` が必ず
+    /// 「リリースに必要なファイルが見つかりません」で失敗するのに、
+    /// 別々のファイルにあるので片方だけ直しても誰も気づけない。しかも
+    /// リリースは滅多に流さないので、気づくのは配布した後になる。
+    /// ここで結び付けておけば、どちらを触っても `cargo test` で分かる。
+    #[test]
+    fn リリースワークフローの配布プラットフォームと解決結果が一致する() {
+        const WORKFLOW: &str = include_str!("../../../.github/workflows/release.yml");
+
+        // `resolve_asset_name` が対応している (OS, アーキテクチャ) と、
+        // そこから決まるプラットフォーム名。
+        let supported = [
+            ("macos", "aarch64", "darwin-arm64"),
+            ("macos", "x86_64", "darwin-x64"),
+            ("linux", "x86_64", "linux-x64"),
+        ];
+
+        for (os, arch, platform) in supported {
+            assert_eq!(
+                resolve_asset_name("nebula", os, arch),
+                Some(format!("nebula-{platform}")),
+                "{os}/{arch} の解決結果が変わっている"
+            );
+            assert!(
+                WORKFLOW.contains(&format!("platform: {platform}")),
+                "{platform} を作る行がリリースワークフローに無い。\
+                 update.rs が探す名前を CI が作っていないので更新が必ず失敗する"
+            );
+        }
+
+        // 逆向きも見る。ワークフローにだけプラットフォームが増えていると、
+        // 配布はされるのに `nebula update` からは永久に見つけられない。
+        let declared = WORKFLOW.matches("platform: ").count();
+        assert_eq!(
+            declared,
+            supported.len(),
+            "ワークフローの platform 行が {} 個ある。resolve_asset_name の対応表と揃えること",
+            declared
+        );
+    }
+
     // --- GitHub API の JSON 解析 ---
 
     /// 実際の GitHub Releases API (`GET /repos/{owner}/{repo}/releases/latest`)

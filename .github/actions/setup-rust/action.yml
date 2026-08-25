@@ -1,0 +1,56 @@
+name: Rust ビルド環境の用意
+description: >
+  ツールチェーンと、GPUI が各プラットフォームで要求するビルド依存を入れる。
+  CI とリリースの両方から使う。同じ手順を 2 つのワークフローに書き写すと、
+  片方だけ直したときに「CI は通るのにリリースだけ落ちる」が起きるので 1 箇所にまとめる。
+
+inputs:
+  targets:
+    description: 追加で入れる rustup ターゲット (クロスビルド用。空なら host のみ)
+    required: false
+    default: ""
+  cache-key:
+    description: キャッシュを分けるための接尾辞
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.targets }}
+
+    - name: Linux — GPUI のビルド依存を入れる
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        # Wayland / X11 / xkbcommon は GPUI のウィンドウ実装が、
+        # fontconfig と freetype は font-kit が、Vulkan は blade-graphics が要求する。
+        # 実行時にしか要らないものも含めて入れておく (CI で足りない方が高くつく)。
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config cmake clang \
+          libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+          libfontconfig1-dev libfreetype6-dev \
+          libvulkan-dev libvulkan1 \
+          libasound2-dev libssl-dev
+
+    - name: macOS — Metal ツールチェーンを用意する
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        # GPUI の build.rs は `xcrun -sdk macosx metal` でシェーダを事前
+        # コンパイルする (crates/gpui build.rs の compile_metal_shaders)。
+        # Xcode 16 以降、Metal ツールチェーンは Xcode 本体と別配布になり、
+        # ランナーのイメージによっては入っていない。
+        if xcrun -sdk macosx metal --version >/dev/null 2>&1; then
+          echo "metal は利用できる"
+        else
+          echo "metal が見つからないのでダウンロードする"
+          xcodebuild -downloadComponent MetalToolchain
+        fi
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ inputs.cache-key }}

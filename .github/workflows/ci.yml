@@ -1,0 +1,53 @@
+# push と pull request のたびに、対応プラットフォームでビルドとテストを通す。
+#
+# ここで意図的に**やっていない**こと:
+#   - `cargo fmt --check`: 既存コードに 95 箇所の非準拠があり、入れた瞬間に赤になる。
+#     揃えるなら整形だけの独立したコミットを先に作ること。
+#   - `cargo clippy -D warnings`: 既存コードに 25 件の指摘があり、同じ理由で入れていない。
+#   - 最低要求バージョン (rust-version = 1.85) の検査: 依存クレートが 1.85 で
+#     通るかを確かめられていないため、赤になるか分からないものを門番にはしない。
+# いずれも「まず既存の指摘を片付けてから門番にする」順序でないと、
+# 赤が常態化して CI が読まれなくなる。
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+  pull_request:
+  workflow_dispatch:
+
+# 同じブランチに連続で push したときは古い実行を打ち切る。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.label }}
+    strategy:
+      # 片方が落ちても、もう片方の結果は知りたい。
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS (arm64)
+          - os: ubuntu-latest
+            label: Linux (x64)
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-rust
+
+      # --locked を付けるのは、Cargo.lock を更新しないと通らない変更が
+      # 黙って混ざるのを防ぐため。リリースと同じ依存で検査する。
+      - name: ビルド
+        run: cargo build --workspace --all-targets --locked
+
+      - name: テスト
+        run: cargo test --workspace --locked

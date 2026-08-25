@@ -1,63 +1,110 @@
-# タグ push (`v*`) をトリガーに macOS(arm64) / Linux(x64) 向けバイナリをビルドし、
+# タグ push (`v*`) をトリガーに各プラットフォーム向けバイナリをビルドし、
 # GitHub Release へ添付する。
 #
-# アセット名 (`nebula-<platform>` / `nebula-backend-<platform>`) は
-# crates/nebula/src/update.rs の `resolve_asset_name` が生成する名前と
-# 文字列で完全一致させる契約になっている。どちらか片方だけを変更すると
-# `nebula update` は「アセットが見つかりません」で必ず失敗するようになるので、
-# 変更する際は両方揃えて直すこと。
+# 配布名 (`nebula-<プラットフォーム>` / `nebula-backend-<プラットフォーム>`) は
+# crates/nebula/src/update.rs の `resolve_asset_name` が組み立てる名前と
+# 文字列で完全一致していなければならない。片方だけ変えると `nebula update` は
+# 「リリースに必要なファイルが見つかりません」で必ず失敗する。
+# ズレたことに気づけるよう、update.rs の
+# `リリースワークフローの配布プラットフォームと解決結果が一致する` が
+# このファイルを実際に読んで突き合わせている。行を増減させるときは
+# そのテストも一緒に見ること。
 #
-# 注意: このワークフローは新規作成であり、まだ 1 度も実行されていない
-# (このリポジトリには GitHub Release がまだ 1 つも無い)。特に Linux 向けの
-# apt パッケージ一覧は GPUI (crates/gpui) の Cargo.toml が Linux 向けに
-# 要求するクレート (blade-graphics=Vulkan, x11rb/xkbcommon=X11,
-# wayland-client=Wayland) から逆算した best-effort であり、初回実行時に
-# 過不足が見つかる可能性がある。
+# 動作確認について: このリポジトリにはまだ Release が 1 つも無く、
+# このワークフローは一度も実行されていない。手で試すときは
+# workflow_dispatch から流すこと (手動実行は必ず下書きとして作られるので、
+# 公開せずに成否だけ確かめられる)。
 name: Release
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 作成するタグ名 (例 v0.1.0)。手動実行は必ず下書きになる
+        required: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: ${{ matrix.platform }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macos-latest は現時点 (2026-08) で Apple Silicon (arm64) ランナー。
+          # macos-latest は Apple Silicon ランナー。Intel 向けは同じランナーから
+          # クロスビルドする。Intel の macOS ランナーは順次退役しているため、
+          # 専用ランナーを当てにしない。
           - os: macos-latest
+            target: aarch64-apple-darwin
             platform: darwin-arm64
+            native: true
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            platform: darwin-x64
+            native: false
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             platform: linux-x64
+            native: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: ${{ matrix.target }}
+          cache-key: release-${{ matrix.platform }}
 
-      - name: Linux の GPUI ビルド依存パッケージを入れる
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config cmake clang lld \
-            libvulkan1 libx11-xcb-dev libxkbcommon-x11-dev \
-            libwayland-dev libssl-dev libfontconfig-dev libglib2.0-dev
+      # タグは任意のコミットに付けられる。CI が通っていないコミットから
+      # 配布物を作らないよう、ここでもテストを通す。クロスビルドした
+      # バイナリはこのランナーでは動かせないので native のときだけ。
+      - name: テスト
+        if: matrix.native
+        run: cargo test --workspace --locked
 
-      - name: ビルド (nebula / nebula-backend)
-        run: cargo build --release --workspace --bins
+      - name: ビルド
+        run: cargo build --release --workspace --bins --locked --target ${{ matrix.target }}
 
-      - name: 配布名へリネームする (resolve_asset_name と一致させる契約)
+      - name: 配布名へ揃える
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/nebula "dist/nebula-${{ matrix.platform }}"
-          cp target/release/nebula-backend "dist/nebula-backend-${{ matrix.platform }}"
+          cp "target/${{ matrix.target }}/release/nebula" "dist/nebula-${{ matrix.platform }}"
+          cp "target/${{ matrix.target }}/release/nebula-backend" "dist/nebula-backend-${{ matrix.platform }}"
+          chmod +x dist/*
+
+      # native のときだけ、作った実行ファイルが本当に起動するか確かめる。
+      # リンクは通ったが共有ライブラリが足りず起動しない、という配布事故を防ぐ。
+      # GUI は画面が要るので、画面の要らないバックエンドだけを起こして落とす。
+      - name: 起動できることを確かめる
+        if: matrix.native
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOCK="${RUNNER_TEMP}/nebula-smoke-$$.sock"
+          "dist/nebula-backend-${{ matrix.platform }}" --socket "$SOCK" &
+          PID=$!
+          for _ in $(seq 1 100); do
+            [ -S "$SOCK" ] && break
+            sleep 0.1
+          done
+          if [ ! -S "$SOCK" ]; then
+            echo "バックエンドがソケットを開けませんでした" >&2
+            kill "$PID" 2>/dev/null || true
+            exit 1
+          fi
+          echo "バックエンドは起動してソケットを開いた"
+          kill "$PID"
+          wait "$PID" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,12 +123,31 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: リリースを作成しバイナリを添付する
+      - name: チェックサムを添える
+        shell: bash
+        run: |
+          cd dist
+          # `nebula-*` は nebula-backend-* にも当たるので、これだけで全部並ぶ。
+          # 両方を並べると同じファイルが二重に載る。
+          sha256sum nebula-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: リリースを作ってバイナリを添付する
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
         run: |
-          gh release create "${{ github.ref_name }}" \
+          set -euo pipefail
+          # 手動実行は動作確認が目的なので、公開せず下書きに留める。
+          DRAFT=()
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DRAFT=(--draft)
+          fi
+          gh release create "$TAG" \
             --repo "${{ github.repository }}" \
-            --title "${{ github.ref_name }}" \
+            --target "${{ github.sha }}" \
+            --title "$TAG" \
             --generate-notes \
+            "${DRAFT[@]}" \
             dist/*

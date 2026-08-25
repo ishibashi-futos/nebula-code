@@ -110,3 +110,34 @@ cargo test --workspace
 
 外部プロセスに依存するテスト (rust-analyzer の起動など) は `#[ignore]` を付けてある。
 まとめて動かすには `cargo test --workspace -- --ignored`。
+
+## CI / リリース
+
+| ワークフロー | いつ動くか | すること |
+|---|---|---|
+| `.github/workflows/ci.yml` | push (`main` / `feat/**`)、pull request、手動 | macOS(arm64) と Linux(x64) で `cargo build --locked` と `cargo test --locked` |
+| `.github/workflows/release.yml` | タグ push (`v*`)、手動 | 3 プラットフォーム向けにビルドし、チェックサムを添えて GitHub Release へ添付 |
+
+ツールチェーンと GPUI のビルド依存 (Linux の Wayland/X11/Vulkan 一式、macOS の
+Metal ツールチェーン) は `.github/actions/setup-rust` にまとめてあり、両方から使う。
+
+リリースが作る配布物:
+
+```
+nebula-darwin-arm64        nebula-backend-darwin-arm64
+nebula-darwin-x64          nebula-backend-darwin-x64
+nebula-linux-x64           nebula-backend-linux-x64
+SHA256SUMS
+```
+
+この名前は `nebula update` が探しに行く名前 (`crates/nebula/src/update.rs` の
+`resolve_asset_name`) と完全に一致していなければならない。片方だけ変えると更新が
+必ず失敗するので、`cargo test` がワークフローの中身を読んで突き合わせている。
+
+**リリースを試すとき**は、いきなりタグを打たずに Actions から `Release` を
+`workflow_dispatch` で流すこと。手動実行は必ず**下書き**として作られるので、
+公開せずにパイプラインの成否だけ確かめられる。
+
+`cargo fmt --check` と `cargo clippy -D warnings` は CI に入れていない。
+既存コードに非準拠が 95 箇所・clippy の指摘が 25 件あり、入れた時点で赤になるため。
+門番にするなら、先に整形と指摘の解消だけを行うコミットを分けて入れること。
