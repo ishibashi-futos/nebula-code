@@ -8,9 +8,9 @@ use crate::theme::{metrics, theme};
 use crate::views::editor_view::EditorView;
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ElementId, ElementInputHandler, Entity, Focusable, GlobalElementId, Hsla,
-    LayoutId, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun, UnderlineStyle,
-    Window, fill, point, px, relative, size,
+    App, Bounds, ElementId, ElementInputHandler, Entity, Focusable, FontWeight, GlobalElementId,
+    Hsla, LayoutId, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun,
+    UnderlineStyle, Window, fill, point, px, relative, size,
 };
 use nebula_core::RopeExt;
 use nebula_protocol::{DiagnosticSeverity, HighlightSpan, HunkKind, TokenKind};
@@ -476,6 +476,9 @@ fn build_runs(
 
     // 行内の各文字に色を割り当てる。スパンは重ならない前提 (バックエンドが保証する)。
     let mut colors: Vec<Hsla> = vec![text_style.color; line_chars];
+    // 見出しだけ太字にする。色だけだと本文と紛れやすく、Markdown の見出しは
+    // 太字であるべきという一般的な見た目の期待にも沿う。
+    let mut bold: Vec<bool> = vec![false; line_chars];
     for span in highlights {
         if span.end <= line_start || span.start >= line_end {
             continue;
@@ -485,6 +488,11 @@ fn build_runs(
         let color = theme.syntax_color(span.token);
         for slot in &mut colors[from..to] {
             *slot = color;
+        }
+        if span.token == TokenKind::Heading {
+            for slot in &mut bold[from..to] {
+                *slot = true;
+            }
         }
     }
 
@@ -531,37 +539,40 @@ fn build_runs(
         }
     }
 
-    // 同じ色・同じ下線が続く区間を 1 ラン に畳む。ランが多いとシェイプが遅くなる。
+    // 同じ色・同じ下線・同じ太さが続く区間を 1 ラン に畳む。ランが多いとシェイプが遅くなる。
     let mut runs: Vec<TextRun> = Vec::new();
-    let mut current: Option<(Hsla, Option<UnderlineStyle>, usize)> = None;
+    let mut current: Option<(Hsla, Option<UnderlineStyle>, bool, usize)> = None;
     for (index, c) in line_text.chars().enumerate() {
         let color = colors[index];
         let underline = underlines[index].clone();
+        let is_bold = bold[index];
         let byte_len = c.len_utf8();
         match &mut current {
-            Some((run_color, run_underline, len))
-                if *run_color == color && underline_eq(run_underline, &underline) =>
+            Some((run_color, run_underline, run_bold, len))
+                if *run_color == color
+                    && underline_eq(run_underline, &underline)
+                    && *run_bold == is_bold =>
             {
                 *len += byte_len;
             }
-            Some((run_color, run_underline, len)) => {
+            Some((run_color, run_underline, run_bold, len)) => {
                 runs.push(TextRun {
                     len: *len,
-                    font: text_style.font(),
+                    font: run_font(text_style, *run_bold),
                     color: *run_color,
                     background_color: None,
                     underline: run_underline.clone(),
                     strikethrough: None,
                 });
-                current = Some((color, underline, byte_len));
+                current = Some((color, underline, is_bold, byte_len));
             }
-            None => current = Some((color, underline, byte_len)),
+            None => current = Some((color, underline, is_bold, byte_len)),
         }
     }
-    if let Some((color, underline, len)) = current {
+    if let Some((color, underline, is_bold, len)) = current {
         runs.push(TextRun {
             len,
-            font: text_style.font(),
+            font: run_font(text_style, is_bold),
             color,
             background_color: None,
             underline,
@@ -569,6 +580,17 @@ fn build_runs(
         });
     }
     runs
+}
+
+/// 見出しなど強調したいトークンだけ太字にしたフォントを返す。
+///
+/// 前例: `views/terminal.rs` の `make_run` と同じイディオム。
+fn run_font(text_style: &gpui::TextStyle, bold: bool) -> gpui::Font {
+    let mut font = text_style.font();
+    if bold {
+        font.weight = FontWeight::BOLD;
+    }
+    font
 }
 
 fn underline_eq(a: &Option<UnderlineStyle>, b: &Option<UnderlineStyle>) -> bool {
@@ -605,5 +627,34 @@ mod tests {
         assert_eq!(char_to_byte("あいう", 1), 3);
         assert_eq!(char_to_byte("あいう", 3), 9, "末尾は文字列長");
         assert_eq!(char_to_byte("あいう", 99), 9, "範囲外も末尾に丸める");
+    }
+
+    #[test]
+    fn 見出しトークンだけ太字のランになる() {
+        // "# " はマーカー部分 (太字にしない)、"見出し" が Heading スパン (太字にする)
+        // という状況を模す。TokenKind::Heading のスパンだけがランを分割し、
+        // そのランのフォントだけが太くなることを確認する。
+        let line = "# 見出し";
+        let heading_start = "# ".chars().count();
+        let highlights = vec![HighlightSpan {
+            start: heading_start,
+            end: line.chars().count(),
+            token: TokenKind::Heading,
+        }];
+        let text_style = gpui::TextStyle::default();
+        let theme = crate::theme::Theme::cyber_cosmic();
+        let runs = build_runs(line, 0, &highlights, &text_style, &theme, &[], 0, None);
+
+        assert_eq!(runs.len(), 2, "マーカーと見出し本文で2ランに分かれる");
+        assert_ne!(
+            runs[0].font.weight,
+            FontWeight::BOLD,
+            "マーカー部分は太字にしない"
+        );
+        assert_eq!(
+            runs[1].font.weight,
+            FontWeight::BOLD,
+            "見出し本文は太字にする"
+        );
     }
 }
