@@ -68,72 +68,97 @@ const INPUT_FONT_SIZE: Pixels = px(15.);
 ///
 /// `id` は app.rs / EditorArea が解釈する文字列。ここを間違えると無反応になるので
 /// 一覧の内容は単体テストで固定してある。
+///
+/// 表示名を英語と日本語の2フィールドに分けているのは、検索（[`command_label`] で
+/// 結合した文字列に対する部分列一致）と描画（英語側だけ淡色にする、
+/// [`render_command_row`] 参照）の両方で「区切り位置」を文字列パースし直さずに
+/// 済ませるため。
 struct CommandDef {
     id: &'static str,
-    label: &'static str,
+    /// VS Code のコマンド名慣習に寄せた英語名。ASCII のみ（単体テストで検査する）。
+    english: &'static str,
+    /// 動作が分かる日本語の動詞句。
+    japanese: &'static str,
     /// 既定のキーバインド。表示のためだけに持つ。
     keystroke: Option<&'static str>,
+}
+
+/// 検索・表示に使う結合ラベル。`"{english}: {japanese}"` の形を一箇所に固定する。
+fn command_label(command: &CommandDef) -> String {
+    format!("{}: {}", command.english, command.japanese)
 }
 
 const COMMANDS: &[CommandDef] = &[
     CommandDef {
         id: "view.explorer",
-        label: "エクスプローラーを表示",
+        english: "Explorer",
+        japanese: "エクスプローラーを表示",
         keystroke: Some("cmd-shift-e"),
     },
     CommandDef {
         id: "view.search",
-        label: "検索",
+        english: "Search",
+        japanese: "検索を表示",
         keystroke: Some("cmd-shift-f"),
     },
     CommandDef {
         id: "view.git",
-        label: "ソース管理",
+        english: "Source Control",
+        japanese: "ソース管理を開く",
         keystroke: Some("cmd-shift-g"),
     },
     CommandDef {
         id: "view.codex",
-        label: "Codex",
+        english: "Codex",
+        japanese: "Codexを開く",
         keystroke: Some("cmd-shift-a"),
     },
     CommandDef {
         id: "view.terminal",
-        label: "ターミナル",
+        english: "Terminal",
+        japanese: "ターミナルを開く",
         keystroke: Some("ctrl-`"),
     },
     CommandDef {
         id: "view.problems",
-        label: "問題",
+        english: "Problems",
+        japanese: "問題を表示",
         keystroke: None,
     },
     CommandDef {
         id: "view.toggleSidebar",
-        label: "サイドバーの表示切り替え",
+        english: "Toggle Sidebar",
+        japanese: "サイドバーの表示切り替え",
         keystroke: Some("cmd-b"),
     },
     CommandDef {
         id: "editor.save",
-        label: "保存",
+        english: "Save",
+        japanese: "保存する",
         keystroke: Some("cmd-s"),
     },
     CommandDef {
         id: "editor.close",
-        label: "タブを閉じる",
+        english: "Close Editor",
+        japanese: "タブを閉じる",
         keystroke: Some("cmd-w"),
     },
     CommandDef {
         id: "editor.splitRight",
-        label: "右に分割",
+        english: "Split Right",
+        japanese: "右に分割",
         keystroke: Some("cmd-\\"),
     },
     CommandDef {
         id: "editor.nextTab",
-        label: "次のタブ",
+        english: "Next Editor",
+        japanese: "次のタブへ移動",
         keystroke: Some("ctrl-tab"),
     },
     CommandDef {
         id: "editor.previousTab",
-        label: "前のタブ",
+        english: "Previous Editor",
+        japanese: "前のタブへ移動",
         keystroke: Some("ctrl-shift-tab"),
     },
 ];
@@ -255,7 +280,7 @@ fn filter_commands(commands: &[CommandDef], query: &str) -> Vec<CommandHit> {
         .iter()
         .enumerate()
         .filter_map(|(index, command)| {
-            if let Some(matched) = fuzzy_match(command.label, query) {
+            if let Some(matched) = fuzzy_match(&command_label(command), query) {
                 return Some(CommandHit {
                     index,
                     // 表示名での一致は識別子での一致より確実に上に来るようにする。
@@ -273,6 +298,28 @@ fn filter_commands(commands: &[CommandDef], query: &str) -> Vec<CommandHit> {
     // 安定ソートなので、同点なら表の並び順が保たれる。
     hits.sort_by_key(|hit| std::cmp::Reverse(hit.score));
     hits
+}
+
+/// 結合ラベル（`"{english}: {japanese}"`）に対する文字位置の強調を、英語側・
+/// 日本語側それぞれの文字列内での位置に分割する。
+///
+/// `english_char_len` は英語部分の文字数（ASCII のみなのでバイト数と一致するが、
+/// 呼び出し側は `chars().count()` を渡すこと）。区切り文字列 `": "` の 2 文字に
+/// かかった位置（コロン自体・直後の空白）はどちらの側にも属さないため捨てる。
+fn split_highlight_positions(english_char_len: usize, positions: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    const SEPARATOR_LEN: usize = 2; // ": "
+    let japanese_start = english_char_len + SEPARATOR_LEN;
+    let english_positions = positions
+        .iter()
+        .filter(|&&p| p < english_char_len)
+        .copied()
+        .collect();
+    let japanese_positions = positions
+        .iter()
+        .filter(|&&p| p >= japanese_start)
+        .map(|&p| p - japanese_start)
+        .collect();
+    (english_positions, japanese_positions)
 }
 
 /// 強調表示のための区間列。`(部分文字列, 一致しているか)`。
@@ -709,17 +756,43 @@ impl CommandPalette {
         } else {
             Icon::Edit
         };
-        let label = self.render_highlighted(
-            command.label,
-            &hit.positions,
-            if selected {
-                theme.text
-            } else {
-                theme.text_muted
-            },
-            px(13.),
-            cx,
-        );
+        // 英語名: 日本語名 を別の見た目で描く。英語側は常に淡色（theme.text_faint）
+        // にして「補助情報」だと分かるようにし、日本語側だけ選択状態に応じた
+        // 通常の文字色にする。ハイライト位置は結合ラベル基準の文字位置なので、
+        // split_highlight_positions で英語側/日本語側それぞれの相対位置に
+        // 付け替えてから render_highlighted に渡す（区切り文字自体にかかった
+        // 位置は split_highlight_positions が捨てる）。
+        let english_char_len = command.english.chars().count();
+        let (english_positions, japanese_positions) =
+            split_highlight_positions(english_char_len, &hit.positions);
+        let japanese_base = if selected {
+            theme.text
+        } else {
+            theme.text_muted
+        };
+        let label = h_flex()
+            .gap(px(4.))
+            .child(self.render_highlighted(
+                command.english,
+                &english_positions,
+                theme.text_faint,
+                px(13.),
+                cx,
+            ))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(theme.text_faint)
+                    .child(":"),
+            )
+            .child(self.render_highlighted(
+                command.japanese,
+                &japanese_positions,
+                japanese_base,
+                px(13.),
+                cx,
+            ))
+            .into_any_element();
 
         list_row(("palette-command", position), selected, cx)
             .h(ROW_HEIGHT)
@@ -1107,8 +1180,21 @@ mod tests {
     }
 
     #[test]
-    fn 識別子でも絞り込めるが表示名の一致を優先する() {
+    fn 英語名を含む表示名で絞り込める() {
+        // 英語名を "Split Right: 右に分割" のように表示名へ含めた結果、
+        // 識別子へのフォールバックを待たずに表示名だけで一致するようになった。
+        // これはこの issue が意図した改善そのものなので、強調位置は
+        // 空ではなく付く方が正しい（フォールバック時のみ空になる）。
         let hits = filter_commands(COMMANDS, "splitright");
+        assert_eq!(COMMANDS[hits[0].index].id, "editor.splitRight");
+        assert!(!hits[0].positions.is_empty(), "表示名側に強調位置が付く");
+    }
+
+    #[test]
+    fn 表示名に無い記号を使えば識別子だけで絞り込める() {
+        // 結合ラベルは "英語名: 日本語名" で "." を含まないので、"." を含む
+        // クエリは表示名側では絶対に一致せず、識別子フォールバックだけが働く。
+        let hits = filter_commands(COMMANDS, "editor.split");
         assert_eq!(COMMANDS[hits[0].index].id, "editor.splitRight");
         assert!(
             hits[0].positions.is_empty(),
@@ -1119,6 +1205,65 @@ mod tests {
     #[test]
     fn 一致しない入力では候補が空になる() {
         assert!(filter_commands(COMMANDS, "zzzqqq").is_empty());
+    }
+
+    #[test]
+    fn 英語名だけの入力で該当コマンドが1位に来る() {
+        let hits = filter_commands(COMMANDS, "term");
+        assert_eq!(COMMANDS[hits[0].index].id, "view.terminal");
+
+        let hits = filter_commands(COMMANDS, "toggle sidebar");
+        assert_eq!(COMMANDS[hits[0].index].id, "view.toggleSidebar");
+    }
+
+    #[test]
+    fn 日本語名だけの入力で該当コマンドが1位に来る() {
+        let hits = filter_commands(COMMANDS, "ターミナル");
+        assert_eq!(COMMANDS[hits[0].index].id, "view.terminal");
+
+        let hits = filter_commands(COMMANDS, "サイドバー");
+        assert_eq!(COMMANDS[hits[0].index].id, "view.toggleSidebar");
+    }
+
+    #[test]
+    fn 全コマンドの表示名は英語名コロン空白日本語名の形式を守る() {
+        for command in COMMANDS {
+            assert!(
+                command.english.is_ascii(),
+                "{} の英語名は ASCII のみであるべき",
+                command.id
+            );
+            let label = command_label(command);
+            assert_eq!(
+                label.matches(": ").count(),
+                1,
+                "{} の表示名は \": \" をちょうど1つ含むべき: {label}",
+                command.id
+            );
+        }
+    }
+
+    #[test]
+    fn 結合ラベルの強調位置を英語側と日本語側へ分けられる() {
+        // "Terminal: ターミナルを開く" の "Terminal" (0..8) と
+        // 区切り文字列 ": " (8..10) と日本語部分 (10..) の境界をまたぐケース。
+        let english_char_len = "Terminal".chars().count();
+        let (english, japanese) = split_highlight_positions(english_char_len, &[0, 3, 10, 11]);
+        assert_eq!(english, vec![0, 3], "英語側は英語部分内の位置がそのまま残る");
+        assert_eq!(
+            japanese,
+            vec![0, 1],
+            "日本語側は区切り文字列ぶん (english_char_len + 2) だけ引いた位置になる"
+        );
+    }
+
+    #[test]
+    fn 区切り文字にかかった強調位置は捨てられる() {
+        // english_char_len が 4 のとき、位置 4 (コロン) と 5 (空白) はどちらの
+        // 側にも属さないので、双方の結果から消える。
+        let (english, japanese) = split_highlight_positions(4, &[3, 4, 5, 6]);
+        assert_eq!(english, vec![3]);
+        assert_eq!(japanese, vec![0]);
     }
 
     #[test]
