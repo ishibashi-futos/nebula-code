@@ -6,8 +6,9 @@ use crate::ipc_client::BackendClient;
 use crate::theme::{metrics, theme};
 use crate::ui::{empty_state, h_flex, v_flex};
 use crate::views::editor_view::{EditorView, EditorViewEvent};
+use crate::views::markdown_preview::MarkdownPreviewView;
 use gpui::prelude::*;
-use gpui::{Context, Entity, EventEmitter, Subscription, Window, div, px};
+use gpui::{App, Context, Entity, EventEmitter, Subscription, Window, div, px};
 use nebula_protocol::{
     BufferId, Event, NotificationLevel, Position, Request, Response, WorkspaceId, WorkspaceInfo,
 };
@@ -28,8 +29,23 @@ struct Tab {
     title: String,
     view: Entity<EditorView>,
     dirty: bool,
+    /// Markdown プレビュー。ペイン分割とは別物 (タブに従属する表示) なので、
+    /// ペインではなくタブごとに持つ。markdown 以外のタブでも作ってはおくが
+    /// (作成自体は軽い)、`preview_visible` が立っていて言語が markdown の
+    /// ときだけ [`EditorArea::render_pane`] が実際に描画へ組み込む。
+    preview: Entity<MarkdownPreviewView>,
+    /// プレビューを表示中か。タブごとに覚える (同じファイルでもタブが別なら別々)。
+    preview_visible: bool,
     /// タブごとの購読。タブを閉じると一緒に解放される。
     _subscription: Subscription,
+}
+
+impl Tab {
+    /// アクティブなタブの言語が markdown かどうか。プレビューをタブバーに
+    /// 出すかどうか・実際に描画へ組み込むかどうかの両方がこれ 1 箇所に依る。
+    fn is_markdown(&self, cx: &App) -> bool {
+        self.view.read(cx).config().language.as_deref() == Some("markdown")
+    }
 }
 
 /// 1 ペイン。タブの並びと選択状態を持つ。
@@ -198,6 +214,7 @@ impl EditorArea {
         let path = snapshot.path.clone();
         let view = cx.new(|cx| EditorView::new(client, workspace, snapshot, cx));
         let subscription = cx.subscribe(&view, Self::on_editor_event);
+        let preview = cx.new(|_cx| MarkdownPreviewView::new(view.clone()));
 
         if let Some(position) = position {
             view.update(cx, |view, cx| view.reveal_position(position, cx));
@@ -210,6 +227,8 @@ impl EditorArea {
             title,
             view,
             dirty: false,
+            preview,
+            preview_visible: false,
             _subscription: subscription,
         });
         pane.active = pane.tabs.len() - 1;
@@ -230,6 +249,12 @@ impl EditorArea {
                     for tab in &mut pane.tabs {
                         if tab.buffer_id == buffer_id {
                             tab.dirty = dirty;
+                            // 新しい通知機構は作らず、この既存の購読に乗る。
+                            // プレビューは埋め込まれてさえいれば親 (EditorArea) の
+                            // 再描画にぶら下がって再変換されるはずだが、それに
+                            // 賭けず自分自身にも notify しておくことで、GPUI の
+                            // 再描画伝播の仕方に依らず確実に追従させる。
+                            tab.preview.update(cx, |_, cx| cx.notify());
                         }
                     }
                 }
@@ -266,6 +291,7 @@ impl EditorArea {
             "editor.splitRight" => self.split_right(cx),
             "editor.nextTab" => self.cycle_tab(1, cx),
             "editor.previousTab" => self.cycle_tab(-1, cx),
+            "editor.togglePreview" => self.toggle_preview(cx),
             _ => {}
         }
     }
@@ -335,6 +361,19 @@ impl EditorArea {
         cx.notify();
     }
 
+    /// アクティブなタブのプレビュー表示を切り替える。markdown 以外のタブで
+    /// 呼ばれても (ショートカット経由などで) 何もしない。実際に表示するかどうかは
+    /// `render_pane` が `Tab::is_markdown` と合わせて判断するので、ここでは
+    /// フラグを立てるだけでよい。
+    fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        let pane = &mut self.panes[self.active_pane];
+        let Some(tab) = pane.tabs.get_mut(pane.active) else {
+            return;
+        };
+        tab.preview_visible = !tab.preview_visible;
+        cx.notify();
+    }
+
     // -- アクション --
 
     fn on_save(&mut self, _: &actions::Save, _w: &mut Window, cx: &mut Context<Self>) {
@@ -356,6 +395,14 @@ impl EditorArea {
     }
     fn on_split_right(&mut self, _: &actions::SplitRight, _w: &mut Window, cx: &mut Context<Self>) {
         self.split_right(cx);
+    }
+    fn on_toggle_preview(
+        &mut self,
+        _: &actions::TogglePreview,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_preview(cx);
     }
 
     fn on_new_file(&mut self, _: &actions::NewFile, _w: &mut Window, cx: &mut Context<Self>) {
@@ -408,6 +455,10 @@ impl EditorArea {
         let theme = theme(cx).clone();
         let pane = &self.panes[pane_index];
         let is_active_pane = pane_index == self.active_pane;
+        // プレビュー切り替えボタンはタブバーに 1 つだけ (アクティブなタブが
+        // markdown のときだけ)。表示するかどうかもこの 2 つの値だけで決まる。
+        let active_tab_markdown = pane.active_tab().is_some_and(|tab| tab.is_markdown(cx));
+        let preview_visible = pane.active_tab().is_some_and(|tab| tab.preview_visible);
 
         let tabs: Vec<_> = pane
             .tabs
@@ -474,13 +525,47 @@ impl EditorArea {
             })
             .collect();
 
-        let body = match pane.active_tab() {
-            Some(tab) => tab.view.clone().into_any_element(),
-            None => empty_state(
-                "ファイルが開かれていません\n⌘P でクイックオープン、⌘⇧P でコマンドパレット",
-                cx,
-            )
-            .into_any_element(),
+        // プレビューはペイン分割 (`split_right`) とは別物: 「もう1つのペイン」では
+        // なくアクティブなタブに従属する表示なので、2 ペイン上限の枠組みには
+        // 触れず、ここで body の隣に直接並べる。
+        let content = match pane.active_tab() {
+            Some(tab) if active_tab_markdown && preview_visible => h_flex()
+                .flex_1()
+                .h_full()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h_full()
+                        .overflow_hidden()
+                        .child(tab.view.clone().into_any_element()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h_full()
+                        .overflow_hidden()
+                        .border_l_1()
+                        .border_color(theme.border)
+                        .child(tab.preview.clone().into_any_element()),
+                )
+                .into_any_element(),
+            Some(tab) => div()
+                .flex_1()
+                .h_full()
+                .overflow_hidden()
+                .child(tab.view.clone().into_any_element())
+                .into_any_element(),
+            None => div()
+                .flex_1()
+                .h_full()
+                .overflow_hidden()
+                .child(empty_state(
+                    "ファイルが開かれていません\n⌘P でクイックオープン、⌘⇧P でコマンドパレット",
+                    cx,
+                ))
+                .into_any_element(),
         };
 
         v_flex()
@@ -501,6 +586,17 @@ impl EditorArea {
                     .overflow_hidden()
                     .children(tabs)
                     .child(div().flex_1())
+                    .when(active_tab_markdown, |el| {
+                        el.child(
+                            crate::ui::icon_button(
+                                ("preview-toggle", pane_index),
+                                Icon::Eye,
+                                preview_visible,
+                                cx,
+                            )
+                            .on_click(cx.listener(|this, _, _w, cx| this.toggle_preview(cx))),
+                        )
+                    })
                     .child(
                         crate::ui::icon_button(
                             ("split", pane_index),
@@ -511,7 +607,7 @@ impl EditorArea {
                         .on_click(cx.listener(|this, _, _w, cx| this.split_right(cx))),
                     ),
             )
-            .child(div().flex_1().overflow_hidden().child(body))
+            .child(content)
             .into_any_element()
     }
 }
@@ -531,6 +627,7 @@ impl Render for EditorArea {
             .on_action(cx.listener(Self::on_next_tab))
             .on_action(cx.listener(Self::on_previous_tab))
             .on_action(cx.listener(Self::on_split_right))
+            .on_action(cx.listener(Self::on_toggle_preview))
             .on_action(cx.listener(Self::on_new_file))
             .on_action(cx.listener(Self::on_save_as))
             .children(panes)

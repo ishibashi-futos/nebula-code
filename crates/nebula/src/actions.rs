@@ -45,6 +45,8 @@ actions!(
         NextWorkspace,
         /// エディタを縦に分割する。
         SplitRight,
+        /// Markdown プレビューの表示切り替え。
+        TogglePreview,
     ]
 );
 
@@ -133,6 +135,7 @@ fn app_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-n", NewFile, None),
         KeyBinding::new("cmd-shift-]", NextWorkspace, None),
         KeyBinding::new("cmd-\\", SplitRight, None),
+        KeyBinding::new("cmd-shift-v", TogglePreview, None),
     ]
 }
 

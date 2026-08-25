@@ -150,6 +150,12 @@ const COMMANDS: &[CommandDef] = &[
         keystroke: Some("cmd-\\"),
     },
     CommandDef {
+        id: "editor.togglePreview",
+        english: "Toggle Markdown Preview",
+        japanese: "Markdownプレビューの表示切り替え",
+        keystroke: Some("cmd-shift-v"),
+    },
+    CommandDef {
         id: "editor.nextTab",
         english: "Next Editor",
         japanese: "次のタブへ移動",
@@ -1159,6 +1165,7 @@ mod tests {
             "editor.save",
             "editor.close",
             "editor.splitRight",
+            "editor.togglePreview",
             "editor.nextTab",
             "editor.previousTab",
         ];
