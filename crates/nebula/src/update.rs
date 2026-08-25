@@ -728,6 +728,13 @@ fn replace_staged(staged: &[(PathBuf, PathBuf)]) -> Result<(), UpdateError> {
         return Ok(());
     };
 
+    // 失敗した位置より後ろは、そもそも置き換えを試していない。第1段階で
+    // ダウンロード済みの一時ファイルが残ったままになるので片付ける
+    // (失敗した位置ぶんは上のループで消してある)。
+    for (_, tmp_path) in staged.iter().skip(failure.index + 1) {
+        let _ = std::fs::remove_file(tmp_path);
+    }
+
     let mut unrecovered: Vec<(PathBuf, PathBuf)> = Vec::new();
     for i in rollback_plan(staged.len(), Some(failure)) {
         let (target, _) = &staged[i];
@@ -1467,6 +1474,48 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&backend_target).expect("backendの読み出し"),
             "旧backend"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 1本目で失敗すると、2本目以降は置き換えを試す前に終わる。第1段階で
+    /// ダウンロード済みの一時ファイルが残ったままだと、更新に失敗するたびに
+    /// 実行ファイルの隣にゴミが積もっていく。
+    #[test]
+    fn 置換に失敗したら試していない分の一時ファイルも片付ける() {
+        let dir =
+            std::env::temp_dir().join(format!("nebula-update-tmp-gc-it-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("作業ディレクトリの作成");
+
+        let nebula_target = dir.join("nebula");
+        // わざと tmp を用意しない → 1本目がここで失敗する。
+        let nebula_tmp = dir.join(".nebula.update-test");
+        std::fs::write(&nebula_target, "旧nebula").expect("旧nebulaの作成");
+
+        let backend_target = dir.join("nebula-backend");
+        let backend_tmp = dir.join(".nebula-backend.update-test");
+        std::fs::write(&backend_target, "旧backend").expect("旧backendの作成");
+        std::fs::write(&backend_tmp, "新backend").expect("新backendの作成");
+
+        let staged = vec![
+            (nebula_target.clone(), nebula_tmp.clone()),
+            (backend_target.clone(), backend_tmp.clone()),
+        ];
+
+        let result = replace_staged(&staged);
+        assert!(result.is_err(), "1本目のtmpが無いので失敗するはず");
+
+        assert!(
+            !backend_tmp.exists(),
+            "試していない2本目の一時ファイルが残っている: {}",
+            backend_tmp.display()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&backend_target).expect("backendの読み出し"),
+            "旧backend",
+            "2本目は手を付けていないので中身が変わってはいけない"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

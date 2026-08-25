@@ -230,7 +230,9 @@ pub mod tooltip_text {
     pub const SHOW_GIT: &str = "ソース管理 (⌘⇧G)";
     pub const SHOW_CODEX: &str = "Codex (⌘⇧A)";
     pub const SETTINGS: &str = "設定 (未実装)";
-    pub const CLOSE_PANEL: &str = "パネルを閉じる (⌘J)";
+    // ⌘J は「パネルの表示切り替え」であって「閉じる」専用ではないので、
+    // このボタンにはショートカットを併記しない。閉じるだけの鍵は無い。
+    pub const CLOSE_PANEL: &str = "パネルを閉じる";
 
     // -- エクスプローラー (views/explorer.rs) --
     pub const EXPLORER_NEW_FILE: &str = "新規ファイル";
@@ -295,6 +297,57 @@ pub mod tooltip_text {
         EDITOR_CLOSE_TAB,
         EDITOR_TOGGLE_PREVIEW,
         EDITOR_SPLIT_RIGHT,
+    ];
+
+    /// [`ALL`] と同じ並びの識別子名。
+    ///
+    /// 文言そのものではなく識別子名を持つのは、「定数を定義しただけで実際のボタンに
+    /// 配線し忘れる」という抜けをテストで捕まえるため。ビューのソースを走査して
+    /// `tooltip_text::<名前>` が出てくるかを調べる (下の
+    /// `すべてのツールチップ文言が実際のボタンに配線されている` を参照)。
+    #[cfg(test)]
+    pub const ALL_NAMES: &[&str] = &[
+        "ADD_WORKSPACE",
+        "SHOW_EXPLORER",
+        "SHOW_SEARCH",
+        "SHOW_GIT",
+        "SHOW_CODEX",
+        "SETTINGS",
+        "CLOSE_PANEL",
+        "EXPLORER_NEW_FILE",
+        "EXPLORER_NEW_FOLDER",
+        "EXPLORER_RELOAD",
+        "EXPLORER_TOGGLE_HIDDEN",
+        "SEARCH_REFRESH",
+        "SEARCH_TOGGLE_REPLACE",
+        "SEARCH_CASE_SENSITIVE",
+        "SEARCH_WHOLE_WORD",
+        "SEARCH_REGEX",
+        "GIT_SWITCH_BRANCH",
+        "GIT_PULL",
+        "GIT_PUSH",
+        "GIT_DISCARD",
+        "GIT_UNSTAGE",
+        "GIT_STAGE",
+        "TERMINAL_ADD",
+        "TERMINAL_CLOSE_TAB",
+        "EDITOR_CLOSE_TAB",
+        "EDITOR_TOGGLE_PREVIEW",
+        "EDITOR_SPLIT_RIGHT",
+    ];
+
+    /// ツールチップを配線しているビューのソース。
+    ///
+    /// 配線漏れの検査に使う。gpui の要素をテストから組み立てて調べる手立てが
+    /// このリポジトリには無いため、ソースを走査するという素朴な方法を採る。
+    #[cfg(test)]
+    pub const WIRED_SOURCES: &[(&str, &str)] = &[
+        ("app.rs", include_str!("app.rs")),
+        ("views/explorer.rs", include_str!("views/explorer.rs")),
+        ("views/search.rs", include_str!("views/search.rs")),
+        ("views/git.rs", include_str!("views/git.rs")),
+        ("views/terminal.rs", include_str!("views/terminal.rs")),
+        ("views/editor.rs", include_str!("views/editor.rs")),
     ];
 
     /// ワークスペースの切り替えボタンだけは押した先の名前を埋め込む動的な文言なので、
@@ -1843,6 +1896,28 @@ mod tests {
         assert!(shortcut_suffix_is_well_formed("設定 (未実装)"));
         assert!(!shortcut_suffix_is_well_formed("ワークスペースを追加(⌘O)"));
         assert!(!shortcut_suffix_is_well_formed("ワークスペースを追加 (⌘O"));
+    }
+
+    /// 定数を定義しただけで実際のボタンに `.tooltip(...)` を付け忘れる、という抜けを捕まえる。
+    ///
+    /// gpui の要素をテストから組み立てて調べる手立てがこのリポジトリには無いので、
+    /// ツールチップを配線しているビューのソースを走査して `tooltip_text::<名前>` が
+    /// 現れるかを見る。素朴だが、配線を消すとこのテストが赤くなる。
+    #[test]
+    fn すべてのツールチップ文言が実際のボタンに配線されている() {
+        for &name in tooltip_text::ALL_NAMES {
+            let needle = format!("tooltip_text::{name}");
+            let wired = tooltip_text::WIRED_SOURCES
+                .iter()
+                .any(|(_, source)| source.contains(&needle));
+            assert!(wired, "{name} がどのビューのボタンにも配線されていない");
+        }
+    }
+
+    /// 文言の一覧と識別子名の一覧がずれていると、上の配線チェックが素通りする。
+    #[test]
+    fn ツールチップの文言一覧と識別子名一覧は同じ数だけある() {
+        assert_eq!(tooltip_text::ALL.len(), tooltip_text::ALL_NAMES.len());
     }
 
     #[test]

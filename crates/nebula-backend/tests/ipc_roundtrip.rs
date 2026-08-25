@@ -322,12 +322,30 @@ fn markdownプレビューの要素列が返る() {
         other => panic!("{other:?}"),
     };
 
+    // 先に 1 回編集して版数を 0 から動かしておく。開いた直後 (版数 0) のまま調べると、
+    // 応答の version を 0 に決め打ちする実装でもテストが通ってしまい、
+    // 「今表示している内容がどの版か」を返せているのかを検査できない。
+    let edited_version = match h.request(Request::ApplyEdits {
+        buffer: buffer.id,
+        base_version: buffer.version,
+        edits: vec![Edit::insert(0, "前書き\n\n")],
+    }) {
+        Ok(Response::BufferVersion { version }) => {
+            assert!(version > buffer.version, "編集で版数が進むこと");
+            version
+        }
+        other => panic!("編集を適用できない: {other:?}"),
+    };
+
     match h.request(Request::MarkdownPreview { buffer: buffer.id }) {
         Ok(Response::MarkdownPreview { version, blocks }) => {
-            assert_eq!(version, buffer.version);
+            assert_eq!(version, edited_version, "編集後の版数がそのまま返ること");
             assert_eq!(
                 blocks,
                 vec![
+                    PreviewBlock::Paragraph {
+                        text: "前書き".into(),
+                    },
                     PreviewBlock::Heading {
                         level: 1,
                         text: "見出し".into(),
