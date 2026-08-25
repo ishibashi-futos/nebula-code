@@ -341,6 +341,11 @@ pub enum UpdateError {
     PermissionDenied(String),
     /// 上記に当てはまらない I/O エラー。
     Io(String),
+    /// フェーズ2 (退避 → 置換) の途中で失敗し、退避ファイルから元へ戻す
+    /// ロールバック自体も失敗した。GUI とバックエンドが食い違ったまま
+    /// 終了しかねないため、利用者が手動で復旧できる具体的な手順を
+    /// メッセージに含めてある (`manual_recovery_message` が組み立てる)。
+    ManualRecoveryRequired(String),
 }
 
 impl std::fmt::Display for UpdateError {
@@ -365,6 +370,7 @@ impl std::fmt::Display for UpdateError {
                 write!(f, "{path} への書き込み権限がありません")
             }
             UpdateError::Io(msg) => write!(f, "{msg}"),
+            UpdateError::ManualRecoveryRequired(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -524,23 +530,36 @@ fn set_executable(path: &Path) -> Result<(), UpdateError> {
 // 置き換え本体
 // ---------------------------------------------------------------------------
 
-/// `target` を置き換えるための一時ファイルパスを決める。
+/// `target` と同じディレクトリに、ファイル名の前後へ `prefix`/`suffix` を
+/// 付けた別名のパスを作る (`tmp_path_for`・`backup_path_for` の共通の下請け)。
 ///
-/// 別ファイルシステム間の `rename` は失敗するため、必ず `target` と同じ
-/// ディレクトリに置く。ファイル名の先頭に `.` を付けて隠しファイルにし、
-/// PID を混ぜて複数の `nebula update` が同時に走っても衝突しないようにする。
-fn tmp_path_for(target: &Path) -> Result<PathBuf, UpdateError> {
+/// 別ファイルシステム間の `rename` は失敗するため、一時ファイル・退避
+/// ファイルは必ず `target` と同じディレクトリに置く必要がある。
+fn sibling_path(target: &Path, prefix: &str, suffix: &str) -> Result<PathBuf, UpdateError> {
     let dir = target.parent().ok_or_else(|| {
         UpdateError::Io(format!("{} の置き場所を特定できません", target.display()))
     })?;
     let file_name = target.file_name().ok_or_else(|| {
         UpdateError::Io(format!("{} はファイル名を持ちません", target.display()))
     })?;
-    Ok(dir.join(format!(
-        ".{}.update-{}",
-        file_name.to_string_lossy(),
-        std::process::id()
-    )))
+    Ok(dir.join(format!("{prefix}{}{suffix}", file_name.to_string_lossy())))
+}
+
+/// `target` を置き換えるための一時ファイルパスを決める。
+///
+/// ファイル名の先頭に `.` を付けて隠しファイルにし、PID を混ぜて複数の
+/// `nebula update` が同時に走っても衝突しないようにする。
+fn tmp_path_for(target: &Path) -> Result<PathBuf, UpdateError> {
+    sibling_path(target, ".", &format!(".update-{}", std::process::id()))
+}
+
+/// フェーズ2 で `target` を置き換える前に、既存のバイナリを退避しておく
+/// ためのファイルパスを決める (例: `nebula.old-12345`)。
+///
+/// `tmp_path_for` と違って隠しファイルにはしない — ロールバック自体が失敗し
+/// 利用者に手動で復旧してもらう場合、`ls` で見えた方が気付きやすいため。
+fn backup_path_for(target: &Path) -> Result<PathBuf, UpdateError> {
+    sibling_path(target, "", &format!(".old-{}", std::process::id()))
 }
 
 /// 1 本のバイナリを一時ファイルへダウンロードし、実行権限を付ける。失敗時は
@@ -560,6 +579,172 @@ fn stage_binary(target: &Path, asset: &ReleaseAsset) -> Result<PathBuf, UpdateEr
     }
 }
 
+// ---------------------------------------------------------------------------
+// フェーズ2: 退避してから置換する
+// ---------------------------------------------------------------------------
+//
+// フェーズ2 は「target → backup」「tmp → target」という 2 段の rename から成る。
+// 前者が失敗した時点では target は無傷 (何も進んでいない)。後者が失敗した
+// 時点では target は空白になっている (元のファイルは backup に退避済み) ので、
+// この本数自身も戻す対象に含めなければならない。この「どこで失敗したら
+// どこまで戻すか」だけを、実際の rename を伴わない純粋関数として切り出し、
+// 単体テストで固定する。
+
+/// フェーズ2 の 1 本 (1 対の target/tmp_path) を処理していて失敗した段階。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase2Stage {
+    /// 退避 (target → backup) 自体が失敗した。target はまだ元のまま。
+    Backup,
+    /// 退避は済んだが、置換 (tmp → target) が失敗した。target は空白になって
+    /// いる (元のファイルは backup に退避済み)。
+    Replace,
+}
+
+/// フェーズ2 が何本目 (0始まり) のどの段階で失敗したか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Phase2Failure {
+    index: usize,
+    stage: Phase2Stage,
+}
+
+/// 「置換対象が全部で何本あるか」と「どこで失敗したか (無ければ全部成功)」
+/// から、退避ファイルを元へ戻すべき `staged` の添字一覧を、戻す順序
+/// (後から成功した方を先に = 逆順) で返す。
+///
+/// 実際の rename は一切呼ばない — 「どこまで進めて、どこで失敗したか」だけ
+/// を入力に取る決定ロジックをここに閉じ込めてあるので、ファイルシステムに
+/// 触れずに単体テストできる。1 本失敗した時点で `replace_staged` はそれ以降
+/// を試みない設計のため、`failure.index` より前はすべて成功している前提を
+/// 置く。
+fn rollback_plan(total: usize, failure: Option<Phase2Failure>) -> Vec<usize> {
+    let Some(Phase2Failure { index, stage }) = failure else {
+        return Vec::new();
+    };
+    debug_assert!(index < total, "失敗地点が置換対象の本数を超えている");
+    let range = match stage {
+        // 退避自体が失敗した本数はまだ何も変えていないので戻す対象に含めない。
+        Phase2Stage::Backup => 0..index,
+        // 退避は済んでいるので、失敗した本数自身も戻す対象に含める。
+        Phase2Stage::Replace => 0..index + 1,
+    };
+    range.rev().collect()
+}
+
+/// 1 本を「退避 → 置換」した結果。
+enum ReplaceOutcome {
+    /// 両方成功した。退避ファイルのパスを保持する
+    /// (呼び出し側が最終的に消すか、後続の失敗を受けて戻すために使う)。
+    Success(PathBuf),
+    /// 退避 (target → backup) 自体が失敗した。target は無傷。
+    BackupFailed(UpdateError),
+    /// 退避は済んだが、置換 (tmp → target) が失敗した。`backup` に退避済みの
+    /// 元ファイルが残っている。
+    ReplaceFailed { backup: PathBuf, error: UpdateError },
+}
+
+/// 1 本のバイナリを「既存を退避 → 新しい方を rename」で置き換える。
+fn replace_one(target: &Path, tmp_path: &Path) -> ReplaceOutcome {
+    let backup = match backup_path_for(target) {
+        Ok(p) => p,
+        Err(e) => return ReplaceOutcome::BackupFailed(e),
+    };
+    if let Err(e) = std::fs::rename(target, &backup) {
+        return ReplaceOutcome::BackupFailed(classify_io_error(e, target));
+    }
+    match std::fs::rename(tmp_path, target) {
+        Ok(()) => ReplaceOutcome::Success(backup),
+        Err(e) => ReplaceOutcome::ReplaceFailed {
+            backup,
+            error: classify_io_error(e, target),
+        },
+    }
+}
+
+/// ロールバック中の rename 自体も失敗した場合に、元のエラーへ「利用者が
+/// 手動で復旧するための具体的な手順」を付け足す。
+///
+/// ここで黙って握りつぶすと、GUI とバックエンドの版数が食い違ったまま誰も
+/// 気付けない状態で残ってしまう (プロトコル版数の不一致でハンドシェイクが
+/// 失敗し、GUI がバックエンドに接続できなくなる)。
+fn manual_recovery_message(original: &UpdateError, unrecovered: &[(PathBuf, PathBuf)]) -> String {
+    let mut msg = format!(
+        "{original}\nさらに、退避ファイルからの自動復旧にも失敗しました。\
+         以下のコマンドを手動で実行して元に戻してください:\n"
+    );
+    for (target, backup) in unrecovered {
+        msg.push_str(&format!("  mv {} {}\n", backup.display(), target.display()));
+    }
+    msg
+}
+
+/// フェーズ2 本体。`staged` (target と、フェーズ1 でダウンロード済みの
+/// 一時ファイルの組) を先頭から順に「退避 → 置換」する。
+///
+/// 途中で失敗したら `rollback_plan` に従い、それまでに成功した分だけ退避
+/// ファイルから戻してからエラーを返す。戻す rename 自体も失敗した場合は、
+/// 黙って壊れた状態のまま終わらせず、利用者が手動で復旧できる具体的な
+/// パスと手順をエラーメッセージに含める (`manual_recovery_message`)。
+fn replace_staged(staged: &[(PathBuf, PathBuf)]) -> Result<(), UpdateError> {
+    let mut backups: Vec<PathBuf> = Vec::with_capacity(staged.len());
+    let mut failure: Option<(Phase2Failure, UpdateError)> = None;
+
+    for (index, (target, tmp_path)) in staged.iter().enumerate() {
+        match replace_one(target, tmp_path) {
+            ReplaceOutcome::Success(backup) => backups.push(backup),
+            ReplaceOutcome::BackupFailed(e) => {
+                // 退避に失敗しても tmp_path はダウンロード済みのまま残って
+                // いるので、使われずに終わることが確定した以上ここで消す。
+                let _ = std::fs::remove_file(tmp_path);
+                failure = Some((
+                    Phase2Failure {
+                        index,
+                        stage: Phase2Stage::Backup,
+                    },
+                    e,
+                ));
+                break;
+            }
+            ReplaceOutcome::ReplaceFailed { backup, error } => {
+                backups.push(backup);
+                let _ = std::fs::remove_file(tmp_path);
+                failure = Some((
+                    Phase2Failure {
+                        index,
+                        stage: Phase2Stage::Replace,
+                    },
+                    error,
+                ));
+                break;
+            }
+        }
+    }
+
+    let Some((failure, error)) = failure else {
+        // 全部成功。退避ファイルはもう不要 (消せなくても更新自体は成功して
+        // いるので黙って無視する)。
+        for backup in &backups {
+            let _ = std::fs::remove_file(backup);
+        }
+        return Ok(());
+    };
+
+    let mut unrecovered: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for i in rollback_plan(staged.len(), Some(failure)) {
+        let (target, _) = &staged[i];
+        if std::fs::rename(&backups[i], target).is_err() {
+            unrecovered.push((target.clone(), backups[i].clone()));
+        }
+    }
+
+    if unrecovered.is_empty() {
+        Err(error)
+    } else {
+        Err(UpdateError::ManualRecoveryRequired(
+            manual_recovery_message(&error, &unrecovered),
+        ))
+    }
+}
+
 /// `nebula` と `nebula-backend` の両方を最新版へ置き換える。
 ///
 /// 3 段階に分ける:
@@ -567,8 +752,12 @@ fn stage_binary(target: &Path, asset: &ReleaseAsset) -> Result<PathBuf, UpdateEr
 /// 2. (フェーズ1) 両方を一時ファイルへダウンロードする。どちらかが失敗したら、
 ///    それまでに作った一時ファイルを片付けて中断する — 元の実行ファイルは
 ///    どちらも触っていないので無傷のまま残る。
-/// 3. (フェーズ2) 両方を rename で置き換える。ここまでにダウンロードは完了して
-///    おり、残るのは同一ディレクトリ内の rename だけなので失敗しにくい。
+/// 3. (フェーズ2) 既存のバイナリを同じディレクトリへ退避してから、
+///    ダウンロード済みの一時ファイルを rename で本来の場所へ置く
+///    (`replace_staged`)。2 本目以降で失敗したら、それまでに置き換えた分を
+///    退避ファイルから戻す — でなければ「GUI だけ新しくてバックエンドは
+///    旧版のまま」という、プロトコル版数の不一致でハンドシェイクが失敗し
+///    GUI がバックエンドに接続できなくなる状態のまま終わってしまう。
 ///
 /// 1 本ずつ「ダウンロード→即rename」を繰り返さないのは、2 本目のダウンロードが
 /// 失敗した場合に「GUI だけ新しくてバックエンドは旧版のまま」という、この
@@ -612,14 +801,7 @@ fn install_release(release: &ReleaseInfo) -> Result<(), UpdateError> {
     }
 
     // フェーズ2。
-    for (target, tmp_path) in &staged {
-        if let Err(e) = std::fs::rename(tmp_path, target) {
-            let _ = std::fs::remove_file(tmp_path);
-            return Err(classify_io_error(e, target));
-        }
-    }
-
-    Ok(())
+    replace_staged(&staged)
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,6 +1298,178 @@ mod tests {
         let tmp = tmp_path_for(target).expect("パスを決められるはず");
         let name = tmp.file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with(".nebula-backend.update-"));
+    }
+
+    // --- 退避ファイルパス ---
+
+    #[test]
+    fn 退避ファイルは対象と同じディレクトリになる() {
+        let target = Path::new("/usr/local/bin/nebula");
+        let backup = backup_path_for(target).expect("パスを決められるはず");
+        assert_eq!(backup.parent(), Some(Path::new("/usr/local/bin")));
+    }
+
+    #[test]
+    fn 退避ファイル名は隠しファイルにせず対象のファイル名を先頭に含む() {
+        let target = Path::new("/usr/local/bin/nebula-backend");
+        let backup = backup_path_for(target).expect("パスを決められるはず");
+        let name = backup.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("nebula-backend.old-"));
+        assert!(!name.starts_with('.'), "退避ファイルは隠しファイルにしない");
+    }
+
+    // --- フェーズ2 のロールバック計画 (決定ロジックの純粋関数) ---
+
+    #[test]
+    fn 全部成功したら戻す対象は無い() {
+        assert_eq!(rollback_plan(2, None), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn 置換1本目が失敗すると1本目だけ戻す() {
+        let failure = Phase2Failure {
+            index: 0,
+            stage: Phase2Stage::Replace,
+        };
+        assert_eq!(rollback_plan(2, Some(failure)), vec![0]);
+    }
+
+    #[test]
+    fn 置換2本目が失敗すると2本目1本目の順に戻す() {
+        // issue の再現そのもの: nebula (1本目) は置換済みで nebula-backend
+        // (2本目) の置換が失敗する。1本目まで巻き戻さないと「GUI だけ新しく
+        // てバックエンドは旧版のまま」というプロトコル不一致の状態が残る。
+        let failure = Phase2Failure {
+            index: 1,
+            stage: Phase2Stage::Replace,
+        };
+        assert_eq!(rollback_plan(2, Some(failure)), vec![1, 0]);
+    }
+
+    #[test]
+    fn 退避自体の失敗では失敗した本数自身は戻さず前段だけ戻す() {
+        // 2本目の退避 (target → backup) 自体が失敗したケース。2本目は
+        // まだ何も変えていないので戻す対象に含めない。1本目は既に置換済み
+        // なので戻す。
+        let failure = Phase2Failure {
+            index: 1,
+            stage: Phase2Stage::Backup,
+        };
+        assert_eq!(rollback_plan(2, Some(failure)), vec![0]);
+    }
+
+    // --- 手動復旧メッセージ ---
+
+    #[test]
+    fn 手動復旧メッセージに退避ファイルと戻し先のパスが両方含まれる() {
+        let original = UpdateError::Io("rename失敗".to_string());
+        let unrecovered = vec![(
+            PathBuf::from("/usr/local/bin/nebula"),
+            PathBuf::from("/usr/local/bin/nebula.old-123"),
+        )];
+        let msg = manual_recovery_message(&original, &unrecovered);
+        assert!(msg.contains("/usr/local/bin/nebula.old-123"), "{msg}");
+        assert!(msg.contains("/usr/local/bin/nebula"), "{msg}");
+        assert!(msg.contains("手動"), "{msg}");
+    }
+
+    // --- フェーズ2 の結合テスト (実ファイルに対して rename を行う) ---
+    //
+    // `nebula` クレートはバイナリのみでライブラリターゲットを持たないため、
+    // `crates/nebula-backend/tests/ipc_roundtrip.rs` のような外部の `tests/`
+    // ディレクトリからはこのモジュールを参照できない。そのためここでは
+    // `#[cfg(test)] mod tests` の中に、実ファイルへ実際に rename を行う
+    // テストとして置く。一意なディレクトリ名にするため
+    // `std::env::temp_dir()` とプロセス ID を使う流儀は同ファイルに倣う。
+
+    #[test]
+    fn 両方成功すると中身が入れ替わりtmpも退避ファイルも残らない() {
+        let dir =
+            std::env::temp_dir().join(format!("nebula-update-happy-it-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("作業ディレクトリの作成");
+
+        let nebula_target = dir.join("nebula");
+        let nebula_tmp = dir.join(".nebula.update-test");
+        std::fs::write(&nebula_target, "旧nebula").expect("旧nebulaの作成");
+        std::fs::write(&nebula_tmp, "新nebula").expect("新nebulaの作成");
+
+        let backend_target = dir.join("nebula-backend");
+        let backend_tmp = dir.join(".nebula-backend.update-test");
+        std::fs::write(&backend_target, "旧backend").expect("旧backendの作成");
+        std::fs::write(&backend_tmp, "新backend").expect("新backendの作成");
+
+        let staged = vec![
+            (nebula_target.clone(), nebula_tmp.clone()),
+            (backend_target.clone(), backend_tmp.clone()),
+        ];
+
+        replace_staged(&staged).expect("両方成功するはず");
+
+        assert_eq!(
+            std::fs::read_to_string(&nebula_target).expect("nebulaの読み出し"),
+            "新nebula"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&backend_target).expect("backendの読み出し"),
+            "新backend"
+        );
+        assert!(!nebula_tmp.exists(), "tmpはrenameで消費されているはず");
+        assert!(!backend_tmp.exists(), "tmpはrenameで消費されているはず");
+
+        // 成功時は退避ファイルも掃除されているはず (要件1 の後半)。
+        let nebula_backup = dir.join(format!("nebula.old-{}", std::process::id()));
+        let backend_backup = dir.join(format!("nebula-backend.old-{}", std::process::id()));
+        assert!(!nebula_backup.exists(), "成功後は退避ファイルを消すはず");
+        assert!(!backend_backup.exists(), "成功後は退避ファイルを消すはず");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 置換2本目が失敗すると1本目も退避ファイルから元の中身へ戻る() {
+        // issue の再現そのもの: nebula (1本目) の置換は成功し、
+        // nebula-backend (2本目) の置換が失敗するケース。1本目を戻さないと
+        // 「GUI だけ新しくてバックエンドは旧版のまま」というプロトコル不一致
+        // で、GUI がバックエンドに接続できなくなる状態のまま終わってしまう。
+        let dir =
+            std::env::temp_dir().join(format!("nebula-update-rollback-it-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("作業ディレクトリの作成");
+
+        let nebula_target = dir.join("nebula");
+        let nebula_tmp = dir.join(".nebula.update-test");
+        std::fs::write(&nebula_target, "旧nebula").expect("旧nebulaの作成");
+        std::fs::write(&nebula_tmp, "新nebula").expect("新nebulaの作成");
+
+        let backend_target = dir.join("nebula-backend");
+        // わざと tmp を用意しない → rename(tmp, target) が失敗し、「退避
+        // (target→backup) には成功したが置換には失敗した」状況を再現する。
+        let backend_tmp = dir.join(".nebula-backend.update-test");
+        std::fs::write(&backend_target, "旧backend").expect("旧backendの作成");
+
+        let staged = vec![
+            (nebula_target.clone(), nebula_tmp.clone()),
+            (backend_target.clone(), backend_tmp.clone()),
+        ];
+
+        let result = replace_staged(&staged);
+        assert!(result.is_err(), "2本目のtmpが無いので失敗するはず");
+
+        // 1本目 (nebula) は一度置換されたが、2本目の失敗を受けて退避ファイル
+        // から元の中身へ戻っているはず。
+        assert_eq!(
+            std::fs::read_to_string(&nebula_target).expect("nebulaの読み出し"),
+            "旧nebula",
+            "1本目が退避ファイルから戻っていない"
+        );
+        // 2本目は退避したものを戻しただけなので中身は変わっていない。
+        assert_eq!(
+            std::fs::read_to_string(&backend_target).expect("backendの読み出し"),
+            "旧backend"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // --- UpdateError の表示文言 ---
