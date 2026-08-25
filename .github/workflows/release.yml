@@ -1,0 +1,87 @@
+# タグ push (`v*`) をトリガーに macOS(arm64) / Linux(x64) 向けバイナリをビルドし、
+# GitHub Release へ添付する。
+#
+# アセット名 (`nebula-<platform>` / `nebula-backend-<platform>`) は
+# crates/nebula/src/update.rs の `resolve_asset_name` が生成する名前と
+# 文字列で完全一致させる契約になっている。どちらか片方だけを変更すると
+# `nebula update` は「アセットが見つかりません」で必ず失敗するようになるので、
+# 変更する際は両方揃えて直すこと。
+#
+# 注意: このワークフローは新規作成であり、まだ 1 度も実行されていない
+# (このリポジトリには GitHub Release がまだ 1 つも無い)。特に Linux 向けの
+# apt パッケージ一覧は GPUI (crates/gpui) の Cargo.toml が Linux 向けに
+# 要求するクレート (blade-graphics=Vulkan, x11rb/xkbcommon=X11,
+# wayland-client=Wayland) から逆算した best-effort であり、初回実行時に
+# 過不足が見つかる可能性がある。
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-latest は現時点 (2026-08) で Apple Silicon (arm64) ランナー。
+          - os: macos-latest
+            platform: darwin-arm64
+          - os: ubuntu-latest
+            platform: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Linux の GPUI ビルド依存パッケージを入れる
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake clang lld \
+            libvulkan1 libx11-xcb-dev libxkbcommon-x11-dev \
+            libwayland-dev libssl-dev libfontconfig-dev libglib2.0-dev
+
+      - name: ビルド (nebula / nebula-backend)
+        run: cargo build --release --workspace --bins
+
+      - name: 配布名へリネームする (resolve_asset_name と一致させる契約)
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/nebula "dist/nebula-${{ matrix.platform }}"
+          cp target/release/nebula-backend "dist/nebula-backend-${{ matrix.platform }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: リリースを作成しバイナリを添付する
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            dist/*

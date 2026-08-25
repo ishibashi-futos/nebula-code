@@ -41,6 +41,21 @@ GUI を起動するとバックエンド (`nebula-backend`) が自動で立ち�
 NEBULA_TRACE_STARTUP=1 ./target/release/nebula .
 ```
 
+## 更新
+
+`nebula update` で GitHub Releases から最新版を取得し、実行中の `nebula` と
+隣に置かれた `nebula-backend` の両方を自己置換する (`curl` が必要)。
+
+```sh
+nebula update          # 最新版があれば nebula / nebula-backend を両方更新する
+nebula update --check  # 更新の有無だけ確認して終了する (何も書き換えない)
+nebula update --force  # 同じか古いバージョンでも再インストールする
+```
+
+`nebula update` はウィンドウを開かず、結果を表示して終了する。終了コードは
+`0` (最新版、または更新完了)・`1` (`--check` で新しいバージョンが見つかった)・
+`2` (エラー) を使い分ける。
+
 ## キーバインド
 
 | 操作 | キー |

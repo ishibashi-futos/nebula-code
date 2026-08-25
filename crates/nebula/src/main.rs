@@ -3,6 +3,9 @@
 //! 冷間起動 200ms 以下という目標のため、`main` から最初のフレームまでの間には
 //! 「テーマとキーバインドの登録」「フォントの登録」「ウィンドウ生成」しか置かない。
 //! バックエンド接続・言語文法のコンパイル・git 状態の取得はすべてフレーム後に回す。
+//!
+//! `nebula update` (自己更新) はこの計測対象に含めない。ウィンドウを一切開かず、
+//! `Application::new().run()` に入る前に分岐して結果と終了コードだけを返す。
 
 mod actions;
 mod app;
@@ -11,6 +14,7 @@ mod ipc_client;
 mod session;
 mod theme;
 mod ui;
+mod update;
 mod views;
 
 use app::NebulaApp;
@@ -19,7 +23,7 @@ use gpui::prelude::*;
 use gpui::{
     App, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size,
 };
-use std::path::PathBuf;
+use std::ffi::OsString;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -40,10 +44,28 @@ pub fn trace_startup() -> bool {
 }
 
 fn main() {
+    // `nebula update` も curl を子プロセスとして起動し、その完了を待つ
+    // (`Command::output`/`status` は内部で `wait()` する)。GUI 起動時と同じ理由
+    // でここを一番先に通す必要があるため、引数の分岐より前に置く
+    // (詳細は reset_signal_state のドキュメントを参照)。
     reset_signal_state();
+
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let initial_folder = match update::parse_cli(&args) {
+        Ok(update::Cli::Update(update_args)) => {
+            // 自己更新はウィンドウを一切開かない。CLI として結果を出して
+            // 終了コードを返すだけの経路なので、gpui に入る前にここで完結させる。
+            std::process::exit(update::run_update(update_args));
+        }
+        Ok(update::Cli::OpenEditor(folder)) => folder.filter(|p| p.is_dir()),
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(update::EXIT_ERROR);
+        }
+    };
+
     let started = Instant::now();
     let _ = STARTED.set(started);
-    let initial_folder = parse_folder_arg();
 
     Application::new()
         .with_assets(NebulaAssets)
@@ -92,12 +114,13 @@ fn main() {
         });
 }
 
-/// 子プロセス (バックエンド) を確実に回収できるよう、シグナルの状態を既定へ戻す。
+/// 子プロセス (バックエンド・`nebula update` の curl) を確実に回収できるよう、
+/// シグナルの状態を既定へ戻す。
 ///
 /// シグナルマスクと「無視 (SIG_IGN)」設定は `exec` を越えて子へ引き継がれる。この
-/// プロセス自身がどんな状態で起動されたかに関わらず、`nebula-backend` を spawn する
-/// 前に一度戻しておけば、子の回収 (`Child::wait()`) や将来シグナルハンドラ経由の
-/// 回収を足す場合にも影響されない。バックエンド側にも同名の関数
+/// プロセス自身がどんな状態で起動されたかに関わらず、子プロセスを spawn する
+/// 前に一度戻しておけば、子の回収 (`Child::wait()` や `Command::output()`/`status()`
+/// が内部で行う待ち合わせ) に影響されない。バックエンド側にも同名の関数
 /// (`nebula-backend/src/main.rs`) があるが、GUI は nebula-protocol と
 /// nebula-core にしか依存しておらず import できないため、ここに複製している。
 fn reset_signal_state() {
@@ -111,12 +134,4 @@ fn reset_signal_state() {
         libc::signal(libc::SIGCHLD, libc::SIG_DFL);
         libc::signal(libc::SIGTERM, libc::SIG_DFL);
     }
-}
-
-/// 引数で渡されたフォルダ。無ければカレントディレクトリを開かない (空の状態で起動する)。
-fn parse_folder_arg() -> Option<PathBuf> {
-    std::env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .filter(|p| p.is_dir())
 }
