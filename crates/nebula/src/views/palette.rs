@@ -12,6 +12,7 @@
 //! 絞り込みとスコアリング、強調位置の切り出しは描画から独立した純粋関数に置き、
 //! 単体テストで固めてある。gpui に触れる部分はテストしない。
 
+use crate::actions::keys;
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::theme;
@@ -80,6 +81,9 @@ struct CommandDef {
     /// 動作が分かる日本語の動詞句。
     japanese: &'static str,
     /// 既定のキーバインド。表示のためだけに持つ。
+    ///
+    /// 文字列を直に書かず `actions::keys` から取る。ここに書き写していた頃は、
+    /// actions.rs 側で打鍵を変えてもパレットの表示だけ古いまま残った。
     keystroke: Option<&'static str>,
 }
 
@@ -93,31 +97,31 @@ const COMMANDS: &[CommandDef] = &[
         id: "view.explorer",
         english: "Explorer",
         japanese: "エクスプローラーを表示",
-        keystroke: Some("cmd-shift-e"),
+        keystroke: Some(keys::SHOW_EXPLORER),
     },
     CommandDef {
         id: "view.search",
         english: "Search",
         japanese: "検索を表示",
-        keystroke: Some("cmd-shift-f"),
+        keystroke: Some(keys::SHOW_SEARCH),
     },
     CommandDef {
         id: "view.git",
         english: "Source Control",
         japanese: "ソース管理を開く",
-        keystroke: Some("cmd-shift-g"),
+        keystroke: Some(keys::SHOW_GIT),
     },
     CommandDef {
         id: "view.codex",
         english: "Codex",
         japanese: "Codexを開く",
-        keystroke: Some("cmd-shift-a"),
+        keystroke: Some(keys::SHOW_CODEX),
     },
     CommandDef {
         id: "view.terminal",
         english: "Terminal",
         japanese: "ターミナルを開く",
-        keystroke: Some("ctrl-`"),
+        keystroke: Some(keys::TOGGLE_TERMINAL),
     },
     CommandDef {
         id: "view.problems",
@@ -129,43 +133,43 @@ const COMMANDS: &[CommandDef] = &[
         id: "view.toggleSidebar",
         english: "Toggle Sidebar",
         japanese: "サイドバーの表示切り替え",
-        keystroke: Some("cmd-b"),
+        keystroke: Some(keys::TOGGLE_SIDEBAR),
     },
     CommandDef {
         id: "editor.save",
         english: "Save",
         japanese: "保存する",
-        keystroke: Some("cmd-s"),
+        keystroke: Some(keys::SAVE),
     },
     CommandDef {
         id: "editor.close",
         english: "Close Editor",
         japanese: "タブを閉じる",
-        keystroke: Some("cmd-w"),
+        keystroke: Some(keys::CLOSE_TAB),
     },
     CommandDef {
         id: "editor.splitRight",
         english: "Split Right",
         japanese: "右に分割",
-        keystroke: Some("cmd-\\"),
+        keystroke: Some(keys::SPLIT_RIGHT),
     },
     CommandDef {
         id: "editor.togglePreview",
         english: "Toggle Markdown Preview",
         japanese: "Markdownプレビューの表示切り替え",
-        keystroke: Some("cmd-shift-v"),
+        keystroke: Some(keys::TOGGLE_PREVIEW),
     },
     CommandDef {
         id: "editor.nextTab",
         english: "Next Editor",
         japanese: "次のタブへ移動",
-        keystroke: Some("ctrl-tab"),
+        keystroke: Some(keys::NEXT_TAB),
     },
     CommandDef {
         id: "editor.previousTab",
         english: "Previous Editor",
         japanese: "前のタブへ移動",
-        keystroke: Some("ctrl-shift-tab"),
+        keystroke: Some(keys::PREVIOUS_TAB),
     },
 ];
 
@@ -919,13 +923,18 @@ impl CommandPalette {
         let count = self.result_count(cx);
 
         if count == 0 {
-            let message = match (self.mode(cx), self.workspace.is_some(), self.searching) {
-                (PaletteMode::Files, false, _) => {
-                    "フォルダが開かれていません\n⌘O でフォルダを開いてください"
+            let message: String = match (self.mode(cx), self.workspace.is_some(), self.searching) {
+                // 案内する打鍵は `actions::keys` から組み立てる。ここに `⌘O` と
+                // 直書きすると、Windows では存在しない打鍵を案内してしまう。
+                (PaletteMode::Files, false, _) => format!(
+                    "フォルダが開かれていません\n{} でフォルダを開いてください",
+                    format_keystroke(keys::OPEN_FOLDER)
+                ),
+                (PaletteMode::Files, true, true) => "検索中…".to_string(),
+                (PaletteMode::Files, true, false) => {
+                    "一致するファイルがありません".to_string()
                 }
-                (PaletteMode::Files, true, true) => "検索中…",
-                (PaletteMode::Files, true, false) => "一致するファイルがありません",
-                (PaletteMode::Commands, _, _) => "一致するコマンドがありません",
+                (PaletteMode::Commands, _, _) => "一致するコマンドがありません".to_string(),
             };
             return div()
                 .w_full()

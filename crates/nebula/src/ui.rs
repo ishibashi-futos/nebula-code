@@ -223,15 +223,36 @@ impl Render for SimpleTooltip {
 /// 見直すときに一覧できなかったりする。ここに集めておき、下のテストで
 /// 「空でない」「重複が無い」「ショートカット併記の形式が揃っている」を機械的に縛る。
 pub mod tooltip_text {
+    use crate::actions::keys;
+
+    /// ショートカットを併記した文言を作る。
+    ///
+    /// 打鍵は `actions::keys` から取り、表記は `format_keystroke` に任せる。
+    /// 以前はここに `⌘O` と直書きしていたので、(1) actions.rs 側で打鍵を変えても
+    /// 文言が古いまま残り、(2) Windows では存在しない打鍵を案内していた。
+    fn with_shortcut(label: &str, key: &str) -> String {
+        format!("{label} ({})", super::format_keystroke(key))
+    }
+
     // -- アプリ全体 (app.rs) --
-    pub const ADD_WORKSPACE: &str = "ワークスペースを追加 (⌘O)";
-    pub const SHOW_EXPLORER: &str = "エクスプローラー (⌘⇧E)";
-    pub const SHOW_SEARCH: &str = "検索 (⌘⇧F)";
-    pub const SHOW_GIT: &str = "ソース管理 (⌘⇧G)";
-    pub const SHOW_CODEX: &str = "Codex (⌘⇧A)";
+    pub fn add_workspace() -> String {
+        with_shortcut("ワークスペースを追加", keys::OPEN_FOLDER)
+    }
+    pub fn show_explorer() -> String {
+        with_shortcut("エクスプローラー", keys::SHOW_EXPLORER)
+    }
+    pub fn show_search() -> String {
+        with_shortcut("検索", keys::SHOW_SEARCH)
+    }
+    pub fn show_git() -> String {
+        with_shortcut("ソース管理", keys::SHOW_GIT)
+    }
+    pub fn show_codex() -> String {
+        with_shortcut("Codex", keys::SHOW_CODEX)
+    }
     pub const SETTINGS: &str = "設定 (未実装)";
-    // ⌘J は「パネルの表示切り替え」であって「閉じる」専用ではないので、
-    // このボタンにはショートカットを併記しない。閉じるだけの鍵は無い。
+    // パネルの表示切り替えの打鍵は「閉じる」専用ではないので、このボタンには
+    // 併記しない。閉じるだけの鍵は無い。
     pub const CLOSE_PANEL: &str = "パネルを閉じる";
 
     // -- エクスプローラー (views/explorer.rs) --
@@ -260,44 +281,62 @@ pub mod tooltip_text {
     pub const TERMINAL_CLOSE_TAB: &str = "ターミナルを閉じる";
 
     // -- エディタ (views/editor.rs) --
-    pub const EDITOR_CLOSE_TAB: &str = "タブを閉じる (⌘W)";
-    pub const EDITOR_TOGGLE_PREVIEW: &str = "Markdown プレビューの表示切り替え (⌘⇧V)";
-    pub const EDITOR_SPLIT_RIGHT: &str = "右に分割 (⌘\\)";
+    pub fn editor_close_tab() -> String {
+        with_shortcut("タブを閉じる", keys::CLOSE_TAB)
+    }
+    pub fn editor_toggle_preview() -> String {
+        with_shortcut("Markdown プレビューの表示切り替え", keys::TOGGLE_PREVIEW)
+    }
+    pub fn editor_split_right() -> String {
+        with_shortcut("右に分割", keys::SPLIT_RIGHT)
+    }
 
     /// 一覧チェック用。文言を増やしたときはここにも必ず足すこと。
+    ///
+    /// ショートカットを併記するものは表記がプラットフォームで変わるため定数に
+    /// できず、関数として持っている。一覧はその両方を平らに並べる。
     ///
     /// テストでしか参照しないので `#[cfg(test)]` で括る。無くすと通常ビルドで
     /// 「参照されていない」という dead_code 警告が新規に出てしまう。
     #[cfg(test)]
-    pub const ALL: &[&str] = &[
-        ADD_WORKSPACE,
-        SHOW_EXPLORER,
-        SHOW_SEARCH,
-        SHOW_GIT,
-        SHOW_CODEX,
-        SETTINGS,
-        CLOSE_PANEL,
-        EXPLORER_NEW_FILE,
-        EXPLORER_NEW_FOLDER,
-        EXPLORER_RELOAD,
-        EXPLORER_TOGGLE_HIDDEN,
-        SEARCH_REFRESH,
-        SEARCH_TOGGLE_REPLACE,
-        SEARCH_CASE_SENSITIVE,
-        SEARCH_WHOLE_WORD,
-        SEARCH_REGEX,
-        GIT_SWITCH_BRANCH,
-        GIT_PULL,
-        GIT_PUSH,
-        GIT_DISCARD,
-        GIT_UNSTAGE,
-        GIT_STAGE,
-        TERMINAL_ADD,
-        TERMINAL_CLOSE_TAB,
-        EDITOR_CLOSE_TAB,
-        EDITOR_TOGGLE_PREVIEW,
-        EDITOR_SPLIT_RIGHT,
-    ];
+    pub fn all() -> Vec<String> {
+        let mut all: Vec<String> = vec![
+            add_workspace(),
+            show_explorer(),
+            show_search(),
+            show_git(),
+            show_codex(),
+            editor_close_tab(),
+            editor_toggle_preview(),
+            editor_split_right(),
+        ];
+        all.extend(
+            [
+                SETTINGS,
+                CLOSE_PANEL,
+                EXPLORER_NEW_FILE,
+                EXPLORER_NEW_FOLDER,
+                EXPLORER_RELOAD,
+                EXPLORER_TOGGLE_HIDDEN,
+                SEARCH_REFRESH,
+                SEARCH_TOGGLE_REPLACE,
+                SEARCH_CASE_SENSITIVE,
+                SEARCH_WHOLE_WORD,
+                SEARCH_REGEX,
+                GIT_SWITCH_BRANCH,
+                GIT_PULL,
+                GIT_PUSH,
+                GIT_DISCARD,
+                GIT_UNSTAGE,
+                GIT_STAGE,
+                TERMINAL_ADD,
+                TERMINAL_CLOSE_TAB,
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        );
+        all
+    }
 
     /// [`ALL`] と同じ並びの識別子名。
     ///
@@ -307,11 +346,14 @@ pub mod tooltip_text {
     /// `すべてのツールチップ文言が実際のボタンに配線されている` を参照)。
     #[cfg(test)]
     pub const ALL_NAMES: &[&str] = &[
-        "ADD_WORKSPACE",
-        "SHOW_EXPLORER",
-        "SHOW_SEARCH",
-        "SHOW_GIT",
-        "SHOW_CODEX",
+        "add_workspace",
+        "show_explorer",
+        "show_search",
+        "show_git",
+        "show_codex",
+        "editor_close_tab",
+        "editor_toggle_preview",
+        "editor_split_right",
         "SETTINGS",
         "CLOSE_PANEL",
         "EXPLORER_NEW_FILE",
@@ -331,9 +373,6 @@ pub mod tooltip_text {
         "GIT_STAGE",
         "TERMINAL_ADD",
         "TERMINAL_CLOSE_TAB",
-        "EDITOR_CLOSE_TAB",
-        "EDITOR_TOGGLE_PREVIEW",
-        "EDITOR_SPLIT_RIGHT",
     ];
 
     /// ツールチップを配線しているビューのソース。
@@ -395,36 +434,95 @@ pub fn truncate_middle(text: &str, max_chars: usize) -> String {
     result
 }
 
-/// キーバインドを人が読める形にする (`cmd-shift-p` → `⌘⇧P`)。
+/// キーバインドを人が読める形にする。
+///
+/// 表記はプラットフォームの作法に合わせる。macOS は記号を詰めて並べ
+/// (`secondary-shift-p` → `⌘⇧P`)、Windows/Linux は語を `+` でつなぐ
+/// (`Ctrl+Shift+P`)。macOS の記号は他の OS では通じず、逆に `Ctrl+Shift+P`
+/// という書き方は macOS では見慣れない。
 pub fn format_keystroke(keystroke: &str) -> String {
-    let mut result = String::new();
-    let parts: Vec<&str> = keystroke.split('-').collect();
-    for (i, part) in parts.iter().enumerate() {
-        let is_last = i + 1 == parts.len();
-        match *part {
-            "cmd" | "super" => result.push('⌘'),
-            "ctrl" => result.push('⌃'),
-            "alt" | "option" => result.push('⌥'),
-            "shift" => result.push('⇧'),
-            key if is_last => {
-                let display = match key {
-                    "enter" => "⏎".to_string(),
-                    "escape" => "⎋".to_string(),
-                    "backspace" => "⌫".to_string(),
-                    "delete" => "⌦".to_string(),
-                    "tab" => "⇥".to_string(),
-                    "up" => "↑".to_string(),
-                    "down" => "↓".to_string(),
-                    "left" => "←".to_string(),
-                    "right" => "→".to_string(),
-                    other => other.to_uppercase(),
-                };
-                result.push_str(&display);
-            }
-            other => result.push_str(other),
-        }
+    format_keystroke_as(keystroke, cfg!(target_os = "macos"))
+}
+
+/// `mac` が真なら macOS の記号表記、偽なら Windows/Linux の語表記。
+///
+/// 実際の OS ではなく引数で切り替えるのは、どちらの表記も全プラットフォームの
+/// `cargo test` で検証できるようにするため。macOS で開発していると Windows の
+/// 表記が一度も実行されないまま壊れる。
+fn format_keystroke_as(keystroke: &str, mac: bool) -> String {
+    // `secondary-k secondary-i` のような連続打鍵は空白区切り。打鍵ごとに
+    // 組み立ててから同じ区切りでつなぐ。
+    keystroke
+        .split_whitespace()
+        .map(|stroke| format_stroke(stroke, mac))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_stroke(stroke: &str, mac: bool) -> String {
+    let segments: Vec<&str> = stroke.split('-').collect();
+    let mut parts: Vec<String> = Vec::with_capacity(segments.len());
+    for (i, segment) in segments.iter().enumerate() {
+        let is_last = i + 1 == segments.len();
+        let rendered = match *segment {
+            // gpui は secondary を macOS では ⌘、それ以外では Ctrl に解決する。
+            // 表示もそれに合わせないと、押せない打鍵を案内することになる。
+            "secondary" if mac => "⌘".to_string(),
+            "secondary" => "Ctrl".to_string(),
+            "cmd" | "super" if mac => "⌘".to_string(),
+            "cmd" | "super" => "Win".to_string(),
+            "ctrl" if mac => "⌃".to_string(),
+            "ctrl" => "Ctrl".to_string(),
+            "alt" | "option" if mac => "⌥".to_string(),
+            "alt" | "option" => "Alt".to_string(),
+            "shift" if mac => "⇧".to_string(),
+            "shift" => "Shift".to_string(),
+            key if is_last => format_key(key, mac),
+            other => other.to_string(),
+        };
+        parts.push(rendered);
     }
-    result
+    // macOS は記号が並ぶので区切りが要らない。語で書く側は `+` でつなぐ。
+    parts.join(if mac { "" } else { "+" })
+}
+
+fn format_key(key: &str, mac: bool) -> String {
+    // 矢印は記号のままがどの OS でも読みやすいので分けない。
+    let arrow = match key {
+        "up" => Some("↑"),
+        "down" => Some("↓"),
+        "left" => Some("←"),
+        "right" => Some("→"),
+        _ => None,
+    };
+    if let Some(arrow) = arrow {
+        return arrow.to_string();
+    }
+    let named = if mac {
+        match key {
+            "enter" => Some("⏎"),
+            "escape" => Some("⎋"),
+            "backspace" => Some("⌫"),
+            "delete" => Some("⌦"),
+            "tab" => Some("⇥"),
+            _ => None,
+        }
+    } else {
+        match key {
+            "enter" => Some("Enter"),
+            "escape" => Some("Esc"),
+            "backspace" => Some("Backspace"),
+            "delete" => Some("Delete"),
+            "tab" => Some("Tab"),
+            "home" => Some("Home"),
+            "end" => Some("End"),
+            "pageup" => Some("PageUp"),
+            "pagedown" => Some("PageDown"),
+            "space" => Some("Space"),
+            _ => None,
+        }
+    };
+    named.map_or_else(|| key.to_uppercase(), str::to_string)
 }
 
 /// ウィンドウがフォーカスを持つかに応じて、境界のネオンを強める。
@@ -763,41 +861,73 @@ fn install_text_input_keymap(cx: &mut App) {
         cx.bind_keys([
             KeyBinding::new("backspace", InputBackspace, ctx),
             KeyBinding::new("delete", InputDelete, ctx),
-            KeyBinding::new("alt-backspace", InputDeleteWordLeft, ctx),
             KeyBinding::new("left", InputLeft, ctx),
             KeyBinding::new("right", InputRight, ctx),
             KeyBinding::new("shift-left", InputSelectLeft, ctx),
             KeyBinding::new("shift-right", InputSelectRight, ctx),
-            KeyBinding::new("alt-left", InputWordLeft, ctx),
-            KeyBinding::new("alt-right", InputWordRight, ctx),
-            KeyBinding::new("alt-shift-left", InputSelectWordLeft, ctx),
-            KeyBinding::new("alt-shift-right", InputSelectWordRight, ctx),
             KeyBinding::new("up", InputUp, ctx),
             KeyBinding::new("down", InputDown, ctx),
             KeyBinding::new("home", InputLineStart, ctx),
             KeyBinding::new("end", InputLineEnd, ctx),
-            KeyBinding::new("cmd-left", InputLineStart, ctx),
-            KeyBinding::new("cmd-right", InputLineEnd, ctx),
             KeyBinding::new("shift-home", InputSelectLineStart, ctx),
             KeyBinding::new("shift-end", InputSelectLineEnd, ctx),
-            KeyBinding::new("cmd-a", InputSelectAll, ctx),
-            KeyBinding::new("cmd-c", InputCopy, ctx),
-            KeyBinding::new("cmd-x", InputCut, ctx),
-            KeyBinding::new("cmd-v", InputPaste, ctx),
+            KeyBinding::new("secondary-a", InputSelectAll, ctx),
+            KeyBinding::new("secondary-c", InputCopy, ctx),
+            KeyBinding::new("secondary-x", InputCut, ctx),
+            KeyBinding::new("secondary-v", InputPaste, ctx),
             KeyBinding::new("enter", InputEnter, ctx),
             KeyBinding::new("shift-enter", InputNewline, ctx),
             KeyBinding::new("alt-enter", InputNewline, ctx),
-            KeyBinding::new("cmd-enter", InputSubmit, ctx),
+            KeyBinding::new("secondary-enter", InputSubmit, ctx),
             KeyBinding::new("escape", InputEscape, ctx),
             // 一覧を持つ呼び出し側 (パレット) が候補送りに使う。入力欄は
             // 何もせずそのまま親へ流す。
             KeyBinding::new("tab", InputTab, ctx),
             KeyBinding::new("shift-tab", InputBackTab, ctx),
-            KeyBinding::new("ctrl-p", InputPrevItem, ctx),
-            KeyBinding::new("ctrl-n", InputNextItem, ctx),
         ]);
+        cx.bind_keys(text_input_navigation_keymap(ctx));
     });
 }
+
+/// 単語・行の端へ動く操作。
+///
+/// エディタ側 (`actions::editor_navigation_bindings`) と同じ理由でここだけ
+/// プラットフォームで分ける。macOS は「⌘+← が行頭、⌥+← が単語」、
+/// Windows/Linux は「Home が行頭、Ctrl+← が単語」。
+#[cfg(target_os = "macos")]
+fn text_input_navigation_keymap(ctx: Option<&'static str>) -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("alt-backspace", InputDeleteWordLeft, ctx),
+        KeyBinding::new("alt-left", InputWordLeft, ctx),
+        KeyBinding::new("alt-right", InputWordRight, ctx),
+        KeyBinding::new("alt-shift-left", InputSelectWordLeft, ctx),
+        KeyBinding::new("alt-shift-right", InputSelectWordRight, ctx),
+        KeyBinding::new("cmd-left", InputLineStart, ctx),
+        KeyBinding::new("cmd-right", InputLineEnd, ctx),
+        // Emacs 風の候補送り。macOS ではアプリ側の打鍵が ⌘ を使うので、
+        // Ctrl+P / Ctrl+N を入力欄が取っても何も奪わない。
+        KeyBinding::new("ctrl-p", InputPrevItem, ctx),
+        KeyBinding::new("ctrl-n", InputNextItem, ctx),
+    ]
+}
+
+/// Windows/Linux では Emacs 風の候補送り (Ctrl+P / Ctrl+N) を入れない。
+///
+/// アプリ側の打鍵も Ctrl を使うため、入力欄がここを取ると Ctrl+P
+/// (クイックオープン) と Ctrl+N (新規ファイル) が入力欄にフォーカスがある
+/// あいだ効かなくなる。入力欄は常にフォーカスを持っている場面が多いので、
+/// 実質「効かない」に等しい。候補送りは ↑↓ で足りるので、そちらへ譲る。
+#[cfg(not(target_os = "macos"))]
+fn text_input_navigation_keymap(ctx: Option<&'static str>) -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("ctrl-backspace", InputDeleteWordLeft, ctx),
+        KeyBinding::new("ctrl-left", InputWordLeft, ctx),
+        KeyBinding::new("ctrl-right", InputWordRight, ctx),
+        KeyBinding::new("ctrl-shift-left", InputSelectWordLeft, ctx),
+        KeyBinding::new("ctrl-shift-right", InputSelectWordRight, ctx),
+    ]
+}
+
 
 // ---------------------------------------------------------------------------
 // 設定と出来事
@@ -1859,10 +1989,39 @@ mod tests {
     }
 
     #[test]
-    fn キーバインド表記を記号に変換する() {
-        assert_eq!(format_keystroke("cmd-shift-p"), "⌘⇧P");
-        assert_eq!(format_keystroke("ctrl-`"), "⌃`");
-        assert_eq!(format_keystroke("cmd-enter"), "⌘⏎");
+    fn macos_のキーバインド表記は記号を詰めて並べる() {
+        assert_eq!(format_keystroke_as("secondary-shift-p", true), "⌘⇧P");
+        assert_eq!(format_keystroke_as("ctrl-`", true), "⌃`");
+        assert_eq!(format_keystroke_as("secondary-enter", true), "⌘⏎");
+        assert_eq!(format_keystroke_as("alt-shift-left", true), "⌥⇧←");
+    }
+
+    /// Windows/Linux では ⌘ も ⌥ も通じない。語を `+` でつないで書く。
+    #[test]
+    fn windows_のキーバインド表記は語を繋げて書く() {
+        assert_eq!(format_keystroke_as("secondary-shift-p", false), "Ctrl+Shift+P");
+        assert_eq!(format_keystroke_as("ctrl-`", false), "Ctrl+`");
+        assert_eq!(format_keystroke_as("secondary-enter", false), "Ctrl+Enter");
+        assert_eq!(format_keystroke_as("alt-shift-left", false), "Alt+Shift+←");
+        assert_eq!(format_keystroke_as("escape", false), "Esc");
+    }
+
+    /// `secondary` は macOS で ⌘、それ以外で Ctrl。表示がここを取り違えると、
+    /// 実際には押せない打鍵を案内することになる。
+    #[test]
+    fn secondary_はプラットフォームごとの修飾キーとして表示される() {
+        assert_eq!(format_keystroke_as("secondary-o", true), "⌘O");
+        assert_eq!(format_keystroke_as("secondary-o", false), "Ctrl+O");
+    }
+
+    /// `secondary-k secondary-i` のような連続打鍵は空白区切りのまま扱う。
+    #[test]
+    fn 連続打鍵は空白で区切ったまま表示する() {
+        assert_eq!(format_keystroke_as("secondary-k secondary-i", true), "⌘K ⌘I");
+        assert_eq!(
+            format_keystroke_as("secondary-k secondary-i", false),
+            "Ctrl+K Ctrl+I"
+        );
     }
 
     // -----------------------------------------------------------------
@@ -1873,29 +2032,22 @@ mod tests {
     // 文言そのものの一覧性 (重複や空文字が無いか) と表記ゆれ (ショートカット
     // 併記の形式) だけを機械的に縛る。
 
-    /// `"… (⌘…)"` の形が守られているかを判定する。
+    /// ショートカット併記は `format_keystroke` の結果をそのまま使う。
     ///
-    /// `⌘` を含まない文言 (「設定 (未実装)」のような注記の丸括弧) は
-    /// ショートカット併記ではないので対象外にする。
-    fn shortcut_suffix_is_well_formed(text: &str) -> bool {
-        if !text.contains('⌘') {
-            return true;
-        }
-        let Some(start) = text.rfind(" (⌘") else {
-            return false;
-        };
-        // "(⌘" の直後から末尾の ")" の手前まで、丸括弧が紛れていないこと。
-        let inner = &text[start + " (".len()..text.len() - 1];
-        text.ends_with(')') && !inner.contains(['(', ')'])
-    }
-
+    /// 以前は文言に `⌘O` と直書きされていて、打鍵を変えても文言が古いまま
+    /// 残った。今は `actions::keys` から組み立てるので、ここでは
+    /// 「組み立て方が変わっていないこと」だけを見れば足りる。
     #[test]
-    fn ショートカット併記の形式を判定できる() {
-        assert!(shortcut_suffix_is_well_formed("ワークスペースを追加 (⌘O)"));
-        // ⌘ を含まない注記は対象外なので、丸括弧があっても崩れているとは判定しない。
-        assert!(shortcut_suffix_is_well_formed("設定 (未実装)"));
-        assert!(!shortcut_suffix_is_well_formed("ワークスペースを追加(⌘O)"));
-        assert!(!shortcut_suffix_is_well_formed("ワークスペースを追加 (⌘O"));
+    fn ショートカット併記は打鍵の表記から作られる() {
+        use crate::actions::keys;
+        assert_eq!(
+            tooltip_text::add_workspace(),
+            format!("ワークスペースを追加 ({})", format_keystroke(keys::OPEN_FOLDER))
+        );
+        assert_eq!(
+            tooltip_text::editor_split_right(),
+            format!("右に分割 ({})", format_keystroke(keys::SPLIT_RIGHT))
+        );
     }
 
     /// 定数を定義しただけで実際のボタンに `.tooltip(...)` を付け忘れる、という抜けを捕まえる。
@@ -1917,12 +2069,12 @@ mod tests {
     /// 文言の一覧と識別子名の一覧がずれていると、上の配線チェックが素通りする。
     #[test]
     fn ツールチップの文言一覧と識別子名一覧は同じ数だけある() {
-        assert_eq!(tooltip_text::ALL.len(), tooltip_text::ALL_NAMES.len());
+        assert_eq!(tooltip_text::all().len(), tooltip_text::ALL_NAMES.len());
     }
 
     #[test]
     fn すべてのツールチップ文言は空でない() {
-        for &text in tooltip_text::ALL {
+        for text in tooltip_text::all() {
             assert!(!text.is_empty());
         }
     }
@@ -1932,18 +2084,8 @@ mod tests {
         use std::collections::HashSet;
 
         let mut seen = HashSet::new();
-        for &text in tooltip_text::ALL {
-            assert!(seen.insert(text), "重複した文言: {text}");
-        }
-    }
-
-    #[test]
-    fn ツールチップのショートカット併記は形式が揃っている() {
-        for &text in tooltip_text::ALL {
-            assert!(
-                shortcut_suffix_is_well_formed(text),
-                "ショートカット併記の形式が崩れている: {text}"
-            );
+        for text in tooltip_text::all() {
+            assert!(seen.insert(text.clone()), "重複した文言: {text}");
         }
     }
 

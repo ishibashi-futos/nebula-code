@@ -12,6 +12,7 @@
 //!    「封をする」。封をしないと、次のターンの 1 文字目が前のターンの応答に続いてしまう。
 //! 3. **状態遷移は描画から切り離した純粋関数に置く。** gpui を起動せずに単体テストできる。
 
+use crate::ui::format_keystroke;
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{metrics, theme};
@@ -1650,7 +1651,11 @@ impl CodexView {
                         div()
                             .text_size(px(9.5))
                             .text_color(theme.text_faint)
-                            .child("⏎ 送信 / ⇧⏎ 改行"),
+                            .child(format!(
+                                "{} 送信 / {} 改行",
+                                format_keystroke("enter"),
+                                format_keystroke("shift-enter")
+                            )),
                     )
                     .child(if self.running {
                         h_flex()

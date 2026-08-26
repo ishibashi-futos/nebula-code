@@ -17,6 +17,7 @@ use crate::ipc_client::BackendClient;
 use crate::theme::{Theme, metrics, theme};
 use crate::ui::{focus_border, h_flex, icon, simple_tooltip, tooltip_text, truncate_middle, v_flex};
 use gpui::prelude::*;
+use gpui::Modifiers;
 use gpui::{
     AnyElement, App, BorderStyle, Bounds, ClipboardItem, Context, ElementId, Entity, FocusHandle,
     Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla, KeyDownEvent, Keystroke,
@@ -375,9 +376,9 @@ impl TerminalView {
         if self.active.is_none() {
             return;
         }
-        // macOS の作法である Cmd+C / Cmd+V はキー変換の通常経路 (keystroke_to_bytes)
-        // より先に処理する。Ctrl+C は SIGINT なので platform 修飾を見ることで
-        // 混同しない (下の is_copy_shortcut / is_paste_shortcut を参照)。
+        // コピー・貼り付けはキー変換の通常経路 (keystroke_to_bytes) より先に
+        // 処理する。打鍵の選び方はプラットフォームで違う
+        // (下の is_clipboard_shortcut を参照)。
         if is_copy_shortcut(&event.keystroke) {
             self.copy_selection(cx);
             cx.stop_propagation();
@@ -1428,18 +1429,38 @@ fn should_auto_launch_terminal(
     !creating && !has_tabs && has_client && has_workspace && panel_visible
 }
 
-/// macOS の作法で Cmd+C (コピー) か。
-///
-/// Ctrl+C は SIGINT でありコピーではないので、platform 修飾 (Cmd) が
-/// 立っているときだけコピーと判定する。混同すると Ctrl+C でプロセスを
-/// 止められなくなる。
+/// コピーの打鍵か。
 fn is_copy_shortcut(keystroke: &Keystroke) -> bool {
-    keystroke.modifiers.platform && keystroke.key == "c"
+    is_clipboard_shortcut(keystroke, "c", cfg!(target_os = "macos"))
 }
 
-/// macOS の作法で Cmd+V (貼り付け) か。
+/// 貼り付けの打鍵か。
 fn is_paste_shortcut(keystroke: &Keystroke) -> bool {
-    keystroke.modifiers.platform && keystroke.key == "v"
+    is_clipboard_shortcut(keystroke, "v", cfg!(target_os = "macos"))
+}
+
+/// 端末のコピー・貼り付けの打鍵か。
+///
+/// **Ctrl+C をコピーにしてはいけない**。Ctrl+C は SIGINT であり、これを奪うと
+/// 端末で走っているプロセスを止められなくなる。
+///
+/// macOS には ⌘ があるので ⌘C / ⌘V を使えば衝突しない。Windows/Linux には
+/// その逃げ道が無いため、端末の慣習どおり Ctrl+Shift+C / Ctrl+Shift+V を使う。
+/// アプリの他の場所 (エディタや入力欄) が `secondary-c` = Ctrl+C を使うのとは
+/// 意図的に違えている。端末だけは Ctrl+C の意味が他と違うため。
+///
+/// `mac` を引数で受けるのは、どちらの作法も全プラットフォームの `cargo test` で
+/// 検証できるようにするため。
+fn is_clipboard_shortcut(keystroke: &Keystroke, key: &str, mac: bool) -> bool {
+    if keystroke.key != key {
+        return false;
+    }
+    let modifiers = keystroke.modifiers;
+    if mac {
+        modifiers.platform && !modifiers.control
+    } else {
+        modifiers.control && modifiers.shift && !modifiers.platform
+    }
 }
 
 /// キー入力を PTY へ流すバイト列に変換する。
@@ -1447,11 +1468,14 @@ fn is_paste_shortcut(keystroke: &Keystroke) -> bool {
 /// 返り値が `None` のキーは端末に送らない (アプリのショートカットへ譲る)。
 fn keystroke_to_bytes(keystroke: &Keystroke) -> Option<Vec<u8>> {
     let modifiers = keystroke.modifiers;
-    // cmd と fn はアプリ側の割り当て。端末には渡さない。
+    // cmd (Windows では Win キー) と fn はアプリ側の割り当て。端末には渡さない。
     if modifiers.platform || modifiers.function {
         return None;
     }
     let key = keystroke.key.as_str();
+    if defers_to_app(&modifiers, key) {
+        return None;
+    }
 
     let special: Option<&[u8]> = match key {
         "enter" => Some(b"\r"),
@@ -1486,6 +1510,27 @@ fn keystroke_to_bytes(keystroke: &Keystroke) -> Option<Vec<u8>> {
     }
 
     Some(printable_text(keystroke)?.into_bytes())
+}
+
+/// 端末より先にアプリのショートカットへ譲る打鍵か。
+///
+/// macOS では ⌘ 修飾がアプリと端末を分ける役目を果たすので、端末が Ctrl 打鍵を
+/// 全部受け取っても衝突しない。Windows/Linux にはその逃げ道が無く、アプリの
+/// 割り当ても端末の制御文字もどちらも Ctrl を使う。
+///
+/// 基本は端末を優先する。Ctrl+C や Ctrl+R が効かない端末は端末として
+/// 使いものにならないため。そのうえで「端末が制御文字として使わない打鍵」だけを
+/// アプリへ譲る。制御文字は Ctrl+英字などで尽きており Ctrl+Shift+… に対応する
+/// ものは無いので、パネル切り替え (Ctrl+Shift+E など) は安全に譲れる。
+/// Ctrl+Tab も端末は使わず、アプリのタブ送りだけが使う。
+///
+/// この判定はプラットフォームで分けない。macOS でも Ctrl+Shift+… を端末が
+/// 飲み込む理由は無く、譲った方が一貫する。
+fn defers_to_app(modifiers: &Modifiers, key: &str) -> bool {
+    if !modifiers.control {
+        return false;
+    }
+    modifiers.shift || key == "tab"
 }
 
 /// 通常文字として送れる文字列。送れないキー (f1 など) は `None`。
@@ -1615,11 +1660,7 @@ mod tests {
 
     #[test]
     fn cmd_併用は端末に送らない() {
-        let cmd = Modifiers {
-            platform: true,
-            ..Modifiers::default()
-        };
-        assert_eq!(keystroke_to_bytes(&key("c", cmd)), None);
+        assert_eq!(keystroke_to_bytes(&key("c", cmd())), None);
         assert_eq!(keystroke_to_bytes(&key("f1", Modifiers::default())), None);
     }
 
@@ -1640,25 +1681,59 @@ mod tests {
         assert_eq!(keystroke_to_bytes(&key("b", alt)), Some(b"\x1bb".to_vec()));
     }
 
-    #[test]
-    fn cmd_c_はコピーと判定され_ctrl_c_は判定されない() {
-        let cmd = Modifiers {
+    fn cmd() -> Modifiers {
+        Modifiers {
             platform: true,
             ..Modifiers::default()
-        };
-        assert!(is_copy_shortcut(&key("c", cmd)));
-        // Ctrl+C は SIGINT。誤ってコピー扱いすると端末でプロセスを止められなくなる。
-        assert!(!is_copy_shortcut(&key("c", ctrl())));
+        }
+    }
+
+    fn ctrl_shift() -> Modifiers {
+        Modifiers {
+            control: true,
+            shift: true,
+            ..Modifiers::default()
+        }
     }
 
     #[test]
-    fn cmd_v_はペーストと判定され_修飾無しの_v_は判定されない() {
-        let cmd = Modifiers {
-            platform: true,
-            ..Modifiers::default()
-        };
-        assert!(is_paste_shortcut(&key("v", cmd)));
-        assert!(!is_paste_shortcut(&key("v", Modifiers::default())));
+    fn macos_では_cmd_c_がコピーで_ctrl_c_は_sigint_のまま() {
+        assert!(is_clipboard_shortcut(&key("c", cmd()), "c", true));
+        // Ctrl+C は SIGINT。誤ってコピー扱いすると端末でプロセスを止められなくなる。
+        assert!(!is_clipboard_shortcut(&key("c", ctrl()), "c", true));
+    }
+
+    /// Windows/Linux には ⌘ が無い。Ctrl+C を奪えないので Ctrl+Shift+C を使う。
+    #[test]
+    fn windows_では_ctrl_shift_c_がコピーで_ctrl_c_は_sigint_のまま() {
+        assert!(is_clipboard_shortcut(&key("c", ctrl_shift()), "c", false));
+        assert!(!is_clipboard_shortcut(&key("c", ctrl()), "c", false));
+        // ⌘ は Windows では Win キー。コピーではない。
+        assert!(!is_clipboard_shortcut(&key("c", cmd()), "c", false));
+    }
+
+    #[test]
+    fn 貼り付けもコピーと同じ作法で判定する() {
+        assert!(is_clipboard_shortcut(&key("v", cmd()), "v", true));
+        assert!(is_clipboard_shortcut(&key("v", ctrl_shift()), "v", false));
+        assert!(!is_clipboard_shortcut(
+            &key("v", Modifiers::default()),
+            "v",
+            true
+        ));
+        // 別のキーには反応しない。
+        assert!(!is_clipboard_shortcut(&key("x", ctrl_shift()), "v", false));
+    }
+
+    /// Ctrl+Shift+… に対応する制御文字は無い。端末が飲み込むと、Windows では
+    /// 端末に居るあいだパネルを切り替えられなくなる。
+    #[test]
+    fn ctrl_shift_併用はアプリへ譲る() {
+        assert_eq!(keystroke_to_bytes(&key("e", ctrl_shift())), None);
+        assert_eq!(keystroke_to_bytes(&key("tab", ctrl())), None);
+        assert_eq!(keystroke_to_bytes(&key("tab", ctrl_shift())), None);
+        // 素の Ctrl+英字は端末のもの。譲ってはいけない。
+        assert_eq!(keystroke_to_bytes(&key("e", ctrl())), Some(vec![0x05]));
     }
 
     // -- グリッド --

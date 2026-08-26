@@ -818,7 +818,7 @@ impl NebulaApp {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.on_open_folder(&actions::OpenFolder, window, cx);
                             }))
-                            .tooltip(simple_tooltip(tooltip_text::ADD_WORKSPACE)),
+                            .tooltip(simple_tooltip(tooltip_text::add_workspace())),
                     ),
             )
             .child(div().mx(px(12.)).h(px(1.)).bg(theme.border).flex_none())
@@ -838,7 +838,7 @@ impl NebulaApp {
                                 this.set_sidebar(SidebarTab::Explorer, cx)
                             }),
                         )
-                        .tooltip(simple_tooltip(tooltip_text::SHOW_EXPLORER)),
+                        .tooltip(simple_tooltip(tooltip_text::show_explorer())),
                     )
                     .child(
                         activity_item(
@@ -850,7 +850,7 @@ impl NebulaApp {
                         .on_click(
                             cx.listener(|this, _, _w, cx| this.set_sidebar(SidebarTab::Search, cx)),
                         )
-                        .tooltip(simple_tooltip(tooltip_text::SHOW_SEARCH)),
+                        .tooltip(simple_tooltip(tooltip_text::show_search())),
                     )
                     .child(
                         activity_item(
@@ -862,7 +862,7 @@ impl NebulaApp {
                         .on_click(
                             cx.listener(|this, _, _w, cx| this.set_sidebar(SidebarTab::Git, cx)),
                         )
-                        .tooltip(simple_tooltip(tooltip_text::SHOW_GIT)),
+                        .tooltip(simple_tooltip(tooltip_text::show_git())),
                     )
                     .child(
                         activity_item(
@@ -874,7 +874,7 @@ impl NebulaApp {
                         .on_click(
                             cx.listener(|this, _, _w, cx| this.set_sidebar(SidebarTab::Codex, cx)),
                         )
-                        .tooltip(simple_tooltip(tooltip_text::SHOW_CODEX)),
+                        .tooltip(simple_tooltip(tooltip_text::show_codex())),
                     ),
             )
             .child(v_flex().pb(px(8.)).items_center().child(

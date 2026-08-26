@@ -7,6 +7,7 @@
 //! **応答を見て自分で一覧を作り直すことはしない**。二重に更新経路を持つと、
 //! 外部で `git` を実行されたときだけ表示がずれる、という追いにくいバグになる。
 
+use crate::ui::format_keystroke;
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{Theme, theme};
@@ -1230,7 +1231,11 @@ impl GitView {
                                         div()
                                             .text_size(px(10.))
                                             .text_color(theme.text_faint)
-                                            .child("⏎ で作成して切り替え / ⎋ で取消"),
+                                            .child(format!(
+                                                "{} で作成して切り替え / {} で取消",
+                                                format_keystroke("enter"),
+                                                format_keystroke("escape")
+                                            )),
                                     ),
                             )
                         })

@@ -1,5 +1,7 @@
 //! エディタ領域。タブとペイン分割を管理し、開いているバッファを並べる。
 
+use crate::ui::format_keystroke;
+use crate::actions::keys;
 use crate::actions;
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
@@ -521,7 +523,7 @@ impl EditorArea {
                             cx.stop_propagation();
                             this.close_tab(pane_index, index, cx);
                         }))
-                        .tooltip(simple_tooltip(tooltip_text::EDITOR_CLOSE_TAB)),
+                        .tooltip(simple_tooltip(tooltip_text::editor_close_tab())),
                     )
                     .on_click(cx.listener(move |this, _, _w, cx| {
                         this.active_pane = pane_index;
@@ -568,7 +570,13 @@ impl EditorArea {
                 .h_full()
                 .overflow_hidden()
                 .child(empty_state(
-                    "ファイルが開かれていません\n⌘P でクイックオープン、⌘⇧P でコマンドパレット",
+                    // 案内する打鍵は `actions::keys` から組み立てる。⌘ を直書きすると
+                    // Windows では押せない打鍵を案内することになる。
+                    format!(
+                        "ファイルが開かれていません\n{} でクイックオープン、{} でコマンドパレット",
+                        format_keystroke(keys::TOGGLE_FILE_FINDER),
+                        format_keystroke(keys::TOGGLE_COMMAND_PALETTE),
+                    ),
                     cx,
                 ))
                 .into_any_element(),
@@ -601,7 +609,7 @@ impl EditorArea {
                                 cx,
                             )
                             .on_click(cx.listener(|this, _, _w, cx| this.toggle_preview(cx)))
-                            .tooltip(simple_tooltip(tooltip_text::EDITOR_TOGGLE_PREVIEW)),
+                            .tooltip(simple_tooltip(tooltip_text::editor_toggle_preview())),
                         )
                     })
                     .child(
@@ -612,7 +620,7 @@ impl EditorArea {
                             cx,
                         )
                         .on_click(cx.listener(|this, _, _w, cx| this.split_right(cx)))
-                        .tooltip(simple_tooltip(tooltip_text::EDITOR_SPLIT_RIGHT)),
+                        .tooltip(simple_tooltip(tooltip_text::editor_split_right())),
                     ),
             )
             .child(content)
