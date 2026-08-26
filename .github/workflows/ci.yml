@@ -41,6 +41,9 @@ jobs:
           - os: windows-latest
             label: Windows (x64)
     runs-on: ${{ matrix.os }}
+    # 結合テストは待ち受けへの接続を待つ。相手が来ないまま固まったときに
+    # 既定の 6 時間ランナーを占有しないよう、上限を切っておく。
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

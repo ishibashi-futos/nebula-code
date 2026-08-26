@@ -578,6 +578,45 @@ fn sibling_path(target: &Path, prefix: &str, suffix: &str) -> Result<PathBuf, Up
     Ok(dir.join(format!("{prefix}{}{suffix}", file_name.to_string_lossy())))
 }
 
+/// 前回の更新が残した退避ファイルを片付ける。
+///
+/// Windows では**実行中の実行ファイルを rename はできても削除はできない**。
+/// 更新直後の後始末 (`replace_staged` の成功経路) は、そのとき動いている
+/// nebula 自身と古いバックエンドを消せないので、`nebula.exe.old-1234` の
+/// ような組が 1 回の更新につき 1 つずつインストール先に溜まっていく。
+///
+/// そこで次の更新の入口で掃除する。その頃には前回の更新で動いていた
+/// プロセスはとうに終わっているので普通に消える。消せなければ黙って
+/// 見送る — 掃除に失敗したからといって更新を止める理由は無い。
+///
+/// Unix では後始末がその場で成功するので、ここは毎回空振りする。
+fn sweep_stale_backups(binaries: &[(&str, PathBuf)]) {
+    for (_, target) in binaries {
+        let (Some(dir), Some(file_name)) = (target.parent(), target.file_name()) else {
+            continue;
+        };
+        let file_name = file_name.to_string_lossy();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if is_backup_name(&entry.file_name().to_string_lossy(), &file_name) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+/// `name` が `target` の退避ファイル (`<target>.old-<PID>`) か。
+///
+/// 末尾が数字であることまで見るのは、利用者が自分で置いた
+/// `nebula.exe.old-backup` のようなファイルを巻き込んで消さないため。
+fn is_backup_name(name: &str, target: &str) -> bool {
+    name.strip_prefix(target)
+        .and_then(|rest| rest.strip_prefix(".old-"))
+        .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// `target` を置き換えるための一時ファイルパスを決める。
 ///
 /// ファイル名の先頭に `.` を付けて隠しファイルにし、PID を混ぜて複数の
@@ -829,6 +868,8 @@ fn install_release(release: &ReleaseInfo) -> Result<(), UpdateError> {
         .ok_or_else(|| UpdateError::Io("実行ファイルの場所を特定できません".to_string()))?;
 
     let binaries = [("nebula", nebula_path), ("nebula-backend", backend_path)];
+
+    sweep_stale_backups(&binaries);
 
     // フェーズ0。
     let mut plan: Vec<(PathBuf, ReleaseAsset)> = Vec::with_capacity(binaries.len());
@@ -1100,6 +1141,27 @@ mod tests {
     fn 未対応の組み合わせはnoneになる() {
         assert_eq!(resolve_asset_name("nebula", "windows", "aarch64"), None);
         assert_eq!(resolve_asset_name("nebula", "linux", "aarch64"), None);
+    }
+
+    #[test]
+    fn 退避ファイルの名前を見分けられる() {
+        assert!(is_backup_name("nebula.exe.old-1234", "nebula.exe"));
+        assert!(is_backup_name("nebula.old-7", "nebula"));
+    }
+
+    /// 別のバイナリの退避ファイルを巻き込んで消さないこと。
+    #[test]
+    fn 別のバイナリの退避ファイルは自分のものと見なさない() {
+        assert!(!is_backup_name("nebula-backend.exe.old-1234", "nebula.exe"));
+        assert!(!is_backup_name("nebula.exe.old-1234", "nebula"));
+    }
+
+    /// 利用者が自分で置いた紛らわしい名前を消してしまわないこと。
+    #[test]
+    fn 数字で終わらない名前は退避ファイルと見なさない() {
+        assert!(!is_backup_name("nebula.exe.old-backup", "nebula.exe"));
+        assert!(!is_backup_name("nebula.exe.old-", "nebula.exe"));
+        assert!(!is_backup_name("nebula.exe", "nebula.exe"));
     }
 
     #[test]

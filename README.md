@@ -13,6 +13,7 @@ Rust と [GPUI](https://www.gpui.rs/) のネイティブ描画性能を使った
 | Rust | 1.85 以上 (edition 2024) |
 | macOS | Xcode + Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`) |
 | Linux | Vulkan ドライバ、X11 または Wayland の開発パッケージ |
+| Windows | Visual Studio Build Tools (MSVC) と Windows SDK。DirectX と DirectWrite は SDK に含まれる |
 
 以下は **あれば使う** もの。無くても起動でき、該当機能だけが無効になる。
 
@@ -115,11 +116,13 @@ cargo test --workspace
 
 | ワークフロー | いつ動くか | すること |
 |---|---|---|
-| `.github/workflows/ci.yml` | push (`main` / `feat/**`)、pull request、手動 | macOS(arm64) と Linux(x64) で `cargo build --locked` と `cargo test --locked` |
-| `.github/workflows/release.yml` | タグ push (`v*`)、手動 | 3 プラットフォーム向けにビルドし、チェックサムを添えて GitHub Release へ添付 |
+| `.github/workflows/ci.yml` | push (`main` / `feat/**`)、pull request、手動 | macOS(arm64)・Linux(x64)・Windows(x64) で `cargo build --locked` と `cargo test --locked` |
+| `.github/workflows/release.yml` | タグ push (`v*`)、手動 | 4 プラットフォーム向けにビルドし、チェックサムを添えて GitHub Release へ添付 |
 
 ツールチェーンと GPUI のビルド依存 (Linux の Wayland/X11/Vulkan 一式、macOS の
 Metal ツールチェーン) は `.github/actions/setup-rust` にまとめてあり、両方から使う。
+Windows は追加で入れるものが無い (必要な DirectX / DirectWrite / `fxc.exe` は
+ランナーに入っている Windows SDK が持っている)。
 
 リリースが作る配布物:
 
@@ -127,6 +130,7 @@ Metal ツールチェーン) は `.github/actions/setup-rust` にまとめてあ
 nebula-darwin-arm64        nebula-backend-darwin-arm64
 nebula-darwin-x64          nebula-backend-darwin-x64
 nebula-linux-x64           nebula-backend-linux-x64
+nebula-windows-x64.exe     nebula-backend-windows-x64.exe
 SHA256SUMS
 ```
 

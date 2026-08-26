@@ -51,6 +51,11 @@ runs:
           xcodebuild -downloadComponent MetalToolchain
         fi
 
+    # Windows に追加で入れるものは無い。GPUI が要求する DirectX・DirectWrite と、
+    # release ビルドで HLSL シェーダをコンパイルする `fxc.exe` は、ランナーに
+    # 最初から入っている Windows SDK が持っている。ここに分岐が無いのは
+    # 「書き忘れ」ではなく「要らない」ことの記録。
+
     - uses: Swatinem/rust-cache@v2
       with:
         key: ${{ inputs.cache-key }}
