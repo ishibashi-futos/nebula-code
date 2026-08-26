@@ -249,9 +249,20 @@ fn connect_or_spawn(endpoint: &Path) -> Result<Stream, ProtocolError> {
 /// バックエンド実行ファイルの位置。GUI と同じディレクトリに置く前提。
 fn backend_binary_path() -> PathBuf {
     let name = format!("nebula-backend{}", std::env::consts::EXE_SUFFIX);
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join(&name)))
+    backend_path_beside(std::env::current_exe().ok().as_deref(), &name)
+}
+
+/// 自分の実行ファイルの位置からバックエンドの位置を決める。
+///
+/// `current_exe` が失敗したときは、ディレクトリを付けない裸の名前へ落とす。
+/// つまり **PATH 任せ**になる。これは「隣に置いてある正しいバイナリ」ではなく
+/// 「PATH のどこかにある別のバイナリ」を起動しうるということで、握り潰している
+/// 失敗としては重い部類に入る (`docs/issues.md` で追跡している)。ここで純粋関数に
+/// 切り出しているのは、`current_exe` の失敗を実機で起こせないため。
+fn backend_path_beside(current_exe: Option<&Path>, name: &str) -> PathBuf {
+    current_exe
+        .and_then(|p| p.parent())
+        .map(|dir| dir.join(name))
         .unwrap_or_else(|| PathBuf::from(name))
 }
 
@@ -310,6 +321,33 @@ fn replace_backend(client: &BackendClient, pid: u32, endpoint: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 以下 `backend_path_beside` の 3 件は characterization test である。
+    // 「この振る舞いが正しい」ことを保証するものではなく、`current_exe` の失敗を
+    // 握り潰して PATH 任せに落ちる現在の挙動を固定し、黙って変わったら赤くなる
+    // ようにするためのもの。fallback の是非そのものは `docs/issues.md` で追跡している。
+
+    #[test]
+    fn 自分の実行ファイルの隣を指す() {
+        let path = backend_path_beside(Some(Path::new("/opt/nebula/nebula")), "nebula-backend");
+        assert_eq!(path, PathBuf::from("/opt/nebula/nebula-backend"));
+    }
+
+    /// `current_exe` が失敗すると、ディレクトリの付かない裸の名前になる。
+    /// 起動は PATH 任せになり、隣にある正しいバイナリとは限らない。
+    #[test]
+    fn 自分の位置が分からなければ_path_任せの裸の名前になる() {
+        let path = backend_path_beside(None, "nebula-backend");
+        assert_eq!(path, PathBuf::from("nebula-backend"));
+        assert!(path.parent().is_none_or(|p| p.as_os_str().is_empty()));
+    }
+
+    /// ルート直下に置かれていても親は `/` として取れるので、裸の名前には落ちない。
+    #[test]
+    fn ルート直下でも隣を指す() {
+        let path = backend_path_beside(Some(Path::new("/nebula")), "nebula-backend");
+        assert_eq!(path, PathBuf::from("/nebula-backend"));
+    }
 
     fn identity(path: &str, mtime_secs: u64, size: u64) -> ExecutableIdentity {
         ExecutableIdentity {

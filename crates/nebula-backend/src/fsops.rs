@@ -190,6 +190,10 @@ pub fn unique_sibling(path: &Path) -> std::path::PathBuf {
     parent.join(format!("{stem}-{}", std::process::id()))
 }
 
+// 以下のうち "characterization test" と明記したものは、fallback (握り潰している失敗) の
+// "現在の挙動" を固定するためだけのテストです。その挙動が正しいと保証するものではなく、
+// 次に誰かが黙って変えたときに検出できるようにするのが目的です。fallback の是非そのものは
+// docs/issues.md で追跡しています。
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +251,44 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// characterization test: `rename` は移動先の存在確認に
+    /// `tokio::fs::try_exists(to).await.unwrap_or(false)` を使っている。ここでは
+    /// 通常どおり存在確認が成功する場合に、既存の移動先へは `ProtocolError::invalid`
+    /// (「既に存在します」) で拒否される現在の挙動を固定する。この挙動が正しいと
+    /// 保証するものではなく、回帰検出のためのもの。fallback (存在確認自体が失敗した
+    /// ときに「存在しない」に丸める挙動) の是非は docs/issues.md で追跡している。
+    #[tokio::test]
+    async fn 移動先が存在すると拒否される() {
+        let dir = temp_dir("rename-exists");
+        let from = dir.join("from.txt");
+        let to = dir.join("to.txt");
+        std::fs::write(&from, "from").unwrap();
+        std::fs::write(&to, "to").unwrap();
+
+        let err = rename(&from, &to).await.unwrap_err();
+        assert_eq!(err.kind, nebula_protocol::ProtocolErrorKind::InvalidRequest);
+        assert!(err.message.contains("既に存在します"));
+        // 拒否されたので移動元はそのまま残る。
+        assert!(from.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// characterization test: 上と対になる経路。移動先が存在しなければ
+    /// `try_exists` は false を返し、そのまま `tokio::fs::rename` へ進むことを固定する。
+    /// fallback の是非は docs/issues.md で追跡している。
+    #[tokio::test]
+    async fn 移動先が存在しなければ移動できる() {
+        let dir = temp_dir("rename-ok");
+        let from = dir.join("from.txt");
+        let to = dir.join("to.txt");
+        std::fs::write(&from, "hello").unwrap();
+
+        rename(&from, &to).await.unwrap();
+        assert!(!from.exists());
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "hello");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[tokio::test]
     async fn フォルダを再帰的に複製できる() {
         let dir = temp_dir("copy");
@@ -257,6 +299,19 @@ mod tests {
             std::fs::read_to_string(dir.join("dst/nested/a.txt")).unwrap(),
             "hello"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// characterization test: `copy_dir_blocking` は `read_dir` で拾ったエントリを
+    /// そのまま複製する。空フォルダ (中身が無いディレクトリエントリ) も
+    /// 構造として複製されることを固定する。fallback の是非は docs/issues.md で
+    /// 追跡している。
+    #[tokio::test]
+    async fn 空フォルダも複製される() {
+        let dir = temp_dir("copy-empty");
+        std::fs::create_dir_all(dir.join("src/empty")).unwrap();
+        copy(&dir.join("src"), &dir.join("dst")).await.unwrap();
+        assert!(dir.join("dst/empty").is_dir());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

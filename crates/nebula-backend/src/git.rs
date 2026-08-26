@@ -422,6 +422,10 @@ fn resolve(path: &Path) -> PathBuf {
     }
 }
 
+// 以下のうち "characterization test" と明記したものは、fallback (握り潰している失敗) の
+// "現在の挙動" を固定するためだけのテストです。その挙動が正しいと保証するものではなく、
+// 次に誰かが黙って変えたときに検出できるようにするのが目的です。fallback の是非そのものは
+// docs/issues.md で追跡しています。
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,6 +645,38 @@ mod tests {
         assert_eq!(added.len(), 1);
         assert_eq!(added[0].kind, HunkKind::Added);
         assert_eq!(added[0].new_lines, 2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// characterization test: `diff_hunks` は `contents` が `None` のとき
+    /// `tokio::fs::read(path)....unwrap_or_default()` でディスクの内容を読む。
+    /// コミット済みのファイルがワーキングツリーから消えている (読めない) と、
+    /// 現在の内容が空文字列扱いになり「全行削除」の差分として返る現在の挙動を
+    /// 固定する。この挙動が正しいと保証するものではなく、回帰検出のためのもの。
+    /// fallback の是非は docs/issues.md で追跡している。
+    #[tokio::test]
+    async fn 保存前にファイルが読めないと全行削除扱いになる() {
+        let dir = init_repo("diff-unreadable");
+        let service = GitService::new();
+        write(&dir, "a.txt", "l1\nl2\nl3\n");
+        service.stage(&dir, &[dir.join("a.txt")]).await.unwrap();
+        service.commit(&dir, "初期", false).await.unwrap();
+
+        // ワーキングツリーから消す (HEAD にはまだ残っている)。
+        std::fs::remove_file(dir.join("a.txt")).unwrap();
+
+        let hunks = service
+            .diff_hunks(&dir, &dir.join("a.txt"), None)
+            .await
+            .unwrap();
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].kind, HunkKind::Removed);
+        assert_eq!(hunks[0].new_lines, 0);
+        assert_eq!(
+            hunks[0].removed_text,
+            vec!["l1".to_string(), "l2".to_string(), "l3".to_string()]
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

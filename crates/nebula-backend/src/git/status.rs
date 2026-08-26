@@ -123,6 +123,10 @@ fn code(byte: u8) -> GitStatusCode {
     }
 }
 
+// 以下のうち "characterization test" と明記したものは、fallback (握り潰している失敗) の
+// "現在の挙動" を固定するためだけのテストです。その挙動が正しいと保証するものではなく、
+// 次に誰かが黙って変えたときに検出できるようにするのが目的です。fallback の是非そのものは
+// docs/issues.md で追跡しています。
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +153,19 @@ mod tests {
         assert_eq!(status.branch, None);
     }
 
+    /// characterization test: `branch.ab` の各トークンは
+    /// `count.parse().unwrap_or(0)` で読んでおり、数値として解析できないトークンは
+    /// 0 に丸めている。片方だけ壊れた入力を使い、正常な方はきちんと読まれる
+    /// (＝ヘッダー行自体が無視されたのではない) ことも合わせて固定する。
+    /// この挙動が正しいと保証するものではなく、回帰検出のためのもの。
+    /// fallback の是非は docs/issues.md で追跡している。
+    #[test]
+    fn 乖離数が数値でなければ0になる() {
+        let status = parse("# branch.ab +abc -2\n");
+        assert_eq!(status.ahead, 0);
+        assert_eq!(status.behind, 2);
+    }
+
     #[test]
     fn 通常変更行を読む() {
         let output = "1 .M N... 100644 100644 100644 \
@@ -158,6 +175,23 @@ de980441c3ab03a8c07dda1ad27b8a11f39deb1e de980441c3ab03a8c07dda1ad27b8a11f39deb1
         assert_eq!(entry.index, GitStatusCode::Unmodified);
         assert_eq!(entry.worktree, GitStatusCode::Modified);
         assert_eq!(entry.original_path, None);
+    }
+
+    /// characterization test: `code()` は既知の文字 (M/T/A/D/R/C/U) 以外をすべて
+    /// `Unmodified` に丸めている (`_ =>` の分岐)。`.` はこの分岐に落ちる意図された値
+    /// だが (他のテストの ".M" 等)、ここでは git のバージョン差などで来うる
+    /// 本当に未知の文字 (`Z`) が来た場合も同じく `Unmodified` に丸められる現在の
+    /// 挙動を固定する。worktree 側は既知の `M` のままであることも確認し、
+    /// エントリ自体が `codes()` の時点で捨てられているわけではないことを示す。
+    /// この挙動が正しいと保証するものではなく、回帰検出のためのもの。
+    /// fallback の是非は docs/issues.md で追跡している。
+    #[test]
+    fn 未知のstatus文字は変更なし扱いになる() {
+        let output = "1 ZM N... 100644 100644 100644 \
+de980441c3ab03a8c07dda1ad27b8a11f39deb1e de980441c3ab03a8c07dda1ad27b8a11f39deb1e src/main.rs\n";
+        let entry = &parse(output).entries[0];
+        assert_eq!(entry.index, GitStatusCode::Unmodified);
+        assert_eq!(entry.worktree, GitStatusCode::Modified);
     }
 
     #[test]

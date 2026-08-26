@@ -50,3 +50,31 @@
 * [ ] ファイルをSaveしないとgitの差分表示が更新されない（編集行の差分状態がわからない）
 * [ ] Windowsでのタスクトレイ/macのメニューバー常駐
 * [ ] GUI そのもの（ウィンドウ生成・描画・IME・操作感）を実機で目視確認する
+
+## v0.1.0 で明示的に受容した fallback
+
+握り潰している失敗のうち、影響が大きいと判断したものの棚卸し。v0.1.0 の再整理では
+**挙動を変えず、現在の挙動を characterization test で固定する**ところまでを行った。
+削除・観測可能化 (ログ追加) は挙動変更にあたるため v0.1.0 では行っていない。
+
+各テストには「この挙動が正しいと保証するものではない」旨のコメントが付いている。
+握り潰しを正仕様として強化しないための注記なので、消さないこと。
+
+| # | 場所 | 握り潰しているエラー | 利用者から見て起きること | v0.1.0 での扱い |
+|---:|---|---|---|---|
+| 1 | `nebula/src/session.rs` | セッションの読み込み失敗・保存失敗 | 前回のフォルダが復元されない。通常起動では理由が一切出ない (`NEBULA_TRACE_STARTUP` のときだけ標準エラーへ) | 既存テストで担保済み |
+| 2 | `nebula-backend/src/fsops.rs` `create_file` / `rename` | `try_exists` 自体の失敗 (権限拒否など) を「存在しない」に丸める | 「確認できない」が「無い」になり、そのまま先へ進む。既存ファイルの上書きになりうる | 存在確認が成功する 2 経路を固定。`try_exists` 自体を失敗させる経路は OS 依存で再現できず未検証 |
+| 3 | `nebula-backend/src/fsops.rs` `copy_dir_blocking` | `read_dir` の個々のエントリ取得失敗、`file_type` の失敗 | 読めなかったエントリだけが黙って複製結果から欠ける。応答は「成功」 | 入れ子・空フォルダの再現を固定。読めないエントリの分岐は権限操作が要るため未検証 |
+| 4 | `nebula-backend/src/search.rs` `walk` | `ignore::WalkBuilder` の走査エラー | クイックオープンの候補からそのファイルだけが静かに抜ける。利用者には「無い」としか見えない | 既存テストで担保済み |
+| 5 | `nebula-backend/src/git.rs` `diff_hunks` (a) | ワーキングツリーのファイル読み取り失敗 | 行ガターが「全行削除」になる。実際には消えていなくても消えたように見える | 契約テストで固定 |
+| 6 | `nebula-backend/src/git.rs` `diff_hunks` (b) | `git show HEAD:<path>` の失敗**全般** | 新規ファイルが全行追加になるのは意図どおり。ただし壊れたリポジトリなど本当の失敗も同じ表示に落ちて区別できない | 既存テストで担保済み。区別が付かない点は下記の残課題 |
+| 7 | `nebula-backend/src/git/status.rs` `code()` | 未知の status 文字 | git が新しい文字を足すと、その変更が「変更なし」として表示から消える | 契約テストで固定 |
+| 8 | `nebula-backend/src/git/status.rs` `branch.ab` | 乖離数の parse 失敗 | ahead/behind が 0 になり「同期済み」に見える。push し忘れに気づけない | 契約テストで固定 |
+| 9 | `nebula/src/views/codex.rs` auth | `CodexAuthStatus` の失敗**全般** | codex が壊れている・落ちているだけでも「未ログイン」と案内される。利用者は `codex login` をやり直してしまう | **記録のみ**。`cx.spawn` の中にあり gpui 無しでは検査できない |
+| 10 | `nebula/src/ipc_client.rs` `backend_binary_path` | `std::env::current_exe()` の失敗 | 隣に置かれた正しいバックエンドではなく、PATH のどこかにある別のバイナリを起動しうる | `backend_path_beside` を純粋関数へ切り出して契約テストで固定 |
+
+残課題 (v0.1.0 では着手しない):
+
+* [ ] `git diff_hunks` の「新規ファイル」と「git 自体の失敗」を区別する (上表 #6)
+* [ ] Codex の認証取得失敗と未ログインを区別して案内する (上表 #9)
+* [ ] `git.rs` の `in_progress()` にも同型の `try_exists(...).unwrap_or(false)` がある。上表 #2 と一緒に見直す
