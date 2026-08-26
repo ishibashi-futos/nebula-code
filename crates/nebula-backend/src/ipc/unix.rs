@@ -75,10 +75,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp_endpoint(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "nebula-test-{name}-{}.sock",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("nebula-test-{name}-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
         path
     }

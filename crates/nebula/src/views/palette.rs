@@ -24,11 +24,11 @@ use crate::ui::{
 use gpui::prelude::*;
 use gpui::{
     App, BoxShadow, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, MouseButton,
-    MouseDownEvent, Pixels, ScrollStrategy, Subscription, Task,
-    UniformListScrollHandle, Window, div, point, px, relative, transparent_black, uniform_list,
+    MouseDownEvent, Pixels, ScrollStrategy, Subscription, Task, UniformListScrollHandle, Window,
+    div, point, px, relative, transparent_black, uniform_list,
 };
-use std::ops::Range;
 use nebula_protocol::{FileCandidate, Request, Response, WorkspaceInfo};
+use std::ops::Range;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -316,7 +316,10 @@ fn filter_commands(commands: &[CommandDef], query: &str) -> Vec<CommandHit> {
 /// `english_char_len` は英語部分の文字数（ASCII のみなのでバイト数と一致するが、
 /// 呼び出し側は `chars().count()` を渡すこと）。区切り文字列 `": "` の 2 文字に
 /// かかった位置（コロン自体・直後の空白）はどちらの側にも属さないため捨てる。
-fn split_highlight_positions(english_char_len: usize, positions: &[usize]) -> (Vec<usize>, Vec<usize>) {
+fn split_highlight_positions(
+    english_char_len: usize,
+    positions: &[usize],
+) -> (Vec<usize>, Vec<usize>) {
     const SEPARATOR_LEN: usize = 2; // ": "
     let japanese_start = english_char_len + SEPARATOR_LEN;
     let english_positions = positions
@@ -658,7 +661,6 @@ impl CommandPalette {
         }));
     }
 
-
     // -- 入力欄から流れてきたキー --
 
     fn on_confirm(&mut self, _: &InputEnter, window: &mut Window, cx: &mut Context<Self>) {
@@ -931,9 +933,7 @@ impl CommandPalette {
                     format_keystroke(keys::OPEN_FOLDER)
                 ),
                 (PaletteMode::Files, true, true) => "検索中…".to_string(),
-                (PaletteMode::Files, true, false) => {
-                    "一致するファイルがありません".to_string()
-                }
+                (PaletteMode::Files, true, false) => "一致するファイルがありません".to_string(),
                 (PaletteMode::Commands, _, _) => "一致するコマンドがありません".to_string(),
             };
             return div()
@@ -1268,7 +1268,11 @@ mod tests {
         // 区切り文字列 ": " (8..10) と日本語部分 (10..) の境界をまたぐケース。
         let english_char_len = "Terminal".chars().count();
         let (english, japanese) = split_highlight_positions(english_char_len, &[0, 3, 10, 11]);
-        assert_eq!(english, vec![0, 3], "英語側は英語部分内の位置がそのまま残る");
+        assert_eq!(
+            english,
+            vec![0, 3],
+            "英語側は英語部分内の位置がそのまま残る"
+        );
         assert_eq!(
             japanese,
             vec![0, 1],

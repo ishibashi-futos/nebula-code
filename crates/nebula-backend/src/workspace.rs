@@ -85,7 +85,11 @@ pub async fn close(state: &Arc<BackendState>, id: WorkspaceId) {
 }
 
 pub fn list(state: &Arc<BackendState>) -> Vec<WorkspaceInfo> {
-    let mut list: Vec<_> = state.workspaces().values().map(|w| w.info.clone()).collect();
+    let mut list: Vec<_> = state
+        .workspaces()
+        .values()
+        .map(|w| w.info.clone())
+        .collect();
     list.sort_by_key(|w| w.id);
     list
 }

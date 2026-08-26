@@ -15,9 +15,11 @@
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{Theme, metrics, theme};
-use crate::ui::{focus_border, h_flex, icon, simple_tooltip, tooltip_text, truncate_middle, v_flex};
-use gpui::prelude::*;
+use crate::ui::{
+    focus_border, h_flex, icon, simple_tooltip, tooltip_text, truncate_middle, v_flex,
+};
 use gpui::Modifiers;
+use gpui::prelude::*;
 use gpui::{
     AnyElement, App, BorderStyle, Bounds, ClipboardItem, Context, ElementId, Entity, FocusHandle,
     Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla, KeyDownEvent, Keystroke,
@@ -397,7 +399,12 @@ impl TerminalView {
         cx.stop_propagation();
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus_handle);
         // ドラッグ選択の開始点を記録する。実寸がまだ無ければ (初回接続前など) 何もしない。
         if self.active.is_some()
@@ -419,7 +426,12 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.selecting {
             return;
         }
@@ -464,7 +476,12 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn on_context_menu(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_context_menu(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus_handle);
         if self.active.is_none() {
             return;
@@ -1206,7 +1223,11 @@ fn selection_columns_in_row(
     if row < start_row || row > end_row || row_len == 0 {
         return None;
     }
-    let from = if row == start_row { start_col.min(row_len) } else { 0 };
+    let from = if row == start_row {
+        start_col.min(row_len)
+    } else {
+        0
+    };
     let to = if row == end_row {
         (end_col + 1).min(row_len)
     } else {
@@ -2124,12 +2145,16 @@ mod tests {
 
     #[test]
     fn バックエンドへ未接続なら自動起動しない() {
-        assert!(!should_auto_launch_terminal(false, false, false, true, true));
+        assert!(!should_auto_launch_terminal(
+            false, false, false, true, true
+        ));
     }
 
     #[test]
     fn 作業フォルダがまだ無ければ自動起動しない() {
-        assert!(!should_auto_launch_terminal(false, false, true, false, true));
+        assert!(!should_auto_launch_terminal(
+            false, false, true, false, true
+        ));
     }
 
     #[test]
@@ -2141,6 +2166,8 @@ mod tests {
     /// 揃っただけで起動すると、パネルを一度も開かない利用者の裏でシェルが常駐する。
     #[test]
     fn パネルが表示されていなければ自動起動しない() {
-        assert!(!should_auto_launch_terminal(false, false, true, true, false));
+        assert!(!should_auto_launch_terminal(
+            false, false, true, true, false
+        ));
     }
 }

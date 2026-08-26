@@ -320,8 +320,14 @@ fn exact_token_kind(name: &str) -> Option<TokenKind> {
     use TokenKind::*;
     Some(match name {
         "keyword" => Keyword,
-        "keyword.control" | "keyword.conditional" | "keyword.repeat" | "keyword.return"
-        | "keyword.exception" | "conditional" | "repeat" | "exception" => KeywordControl,
+        "keyword.control"
+        | "keyword.conditional"
+        | "keyword.repeat"
+        | "keyword.return"
+        | "keyword.exception"
+        | "conditional"
+        | "repeat"
+        | "exception" => KeywordControl,
         "keyword.operator" => Operator,
         "function" | "function.call" | "function.method" | "function.builtin" | "method" => {
             Function
@@ -340,8 +346,9 @@ fn exact_token_kind(name: &str) -> Option<TokenKind> {
         "comment" => Comment,
         "comment.documentation" | "comment.doc" => CommentDoc,
         "operator" => Operator,
-        "punctuation" | "punctuation.delimiter" | "punctuation.bracket"
-        | "punctuation.special" => Punctuation,
+        "punctuation" | "punctuation.delimiter" | "punctuation.bracket" | "punctuation.special" => {
+            Punctuation
+        }
         "namespace" | "module" | "package" => Namespace,
         "attribute" | "annotation" | "decorator" => Attribute,
         "tag" | "tag.builtin" => Tag,
@@ -409,12 +416,18 @@ mod tests {
     fn markdownの見出しキャプチャがheadingに解決される() {
         // tree-sitter-md の highlights.scm は見出しを "text.title" で捕捉する。
         // ここが素の "text" に落ちると、見出しが地の文と同じ色になってしまう。
-        assert_eq!(token_kind_for_capture("text.title"), Some(TokenKind::Heading));
+        assert_eq!(
+            token_kind_for_capture("text.title"),
+            Some(TokenKind::Heading)
+        );
     }
 
     #[test]
     fn markdownのコードスパンはstringに解決される() {
-        assert_eq!(token_kind_for_capture("text.literal"), Some(TokenKind::String));
+        assert_eq!(
+            token_kind_for_capture("text.literal"),
+            Some(TokenKind::String)
+        );
     }
 
     #[test]

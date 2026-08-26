@@ -18,9 +18,14 @@ use std::path::PathBuf;
 /// GUI → バックエンド。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
-    Request { id: RequestId, request: Request },
+    Request {
+        id: RequestId,
+        request: Request,
+    },
     /// 進行中の要求の取り消し。応答は返らないこともある。
-    Cancel { id: RequestId },
+    Cancel {
+        id: RequestId,
+    },
 }
 
 /// バックエンド → GUI。
@@ -41,7 +46,9 @@ pub enum ServerMessage {
 pub enum Request {
     // -- 接続 --
     /// 接続直後に必ず送る。版数不一致ならバックエンドはエラーを返して切断する。
-    Handshake { protocol_version: u32 },
+    Handshake {
+        protocol_version: u32,
+    },
     /// バックエンドを終了させる。最後の GUI が閉じるときに送る。
     Shutdown,
 

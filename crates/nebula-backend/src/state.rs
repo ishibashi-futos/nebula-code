@@ -13,8 +13,8 @@ use crate::watch::WatchService;
 use nebula_core::language::Language;
 use nebula_core::{LanguageRegistry, SyntaxTree, TextBuffer};
 use nebula_protocol::{
-    BufferId, BufferSnapshot, DetectedTools, Event, ExecutableIdentity, ProtocolError,
-    WorkspaceId, WorkspaceInfo,
+    BufferId, BufferSnapshot, DetectedTools, Event, ExecutableIdentity, ProtocolError, WorkspaceId,
+    WorkspaceInfo,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -133,7 +133,9 @@ impl BackendState {
         self.workspaces()
             .get(&id)
             .map(|w| w.info.root.clone())
-            .ok_or_else(|| ProtocolError::not_found(format!("ワークスペース {id} は開かれていません")))
+            .ok_or_else(|| {
+                ProtocolError::not_found(format!("ワークスペース {id} は開かれていません"))
+            })
     }
 
     /// ワークスペースに対応する git リポジトリルート。

@@ -1,11 +1,11 @@
 //! エディタ領域。タブとペイン分割を管理し、開いているバッファを並べる。
 
-use crate::ui::format_keystroke;
-use crate::actions::keys;
 use crate::actions;
+use crate::actions::keys;
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{metrics, theme};
+use crate::ui::format_keystroke;
 use crate::ui::{empty_state, h_flex, simple_tooltip, tooltip_text, v_flex};
 use crate::views::editor_view::{EditorView, EditorViewEvent};
 use crate::views::markdown_preview::MarkdownPreviewView;
@@ -500,12 +500,7 @@ impl EditorArea {
                     // 未保存マークは装飾として残す。閉じるボタンとは別物なので、
                     // これがあっても ✖ は常に押せる（未保存タブも ✖ から閉じられる）。
                     .when(dirty, |el| {
-                        el.child(
-                            div()
-                                .size(px(7.))
-                                .rounded_full()
-                                .bg(theme.accent_secondary),
-                        )
+                        el.child(div().size(px(7.)).rounded_full().bg(theme.accent_secondary))
                     })
                     .child(
                         crate::ui::icon_button(
@@ -613,14 +608,9 @@ impl EditorArea {
                         )
                     })
                     .child(
-                        crate::ui::icon_button(
-                            ("split", pane_index),
-                            Icon::Split,
-                            false,
-                            cx,
-                        )
-                        .on_click(cx.listener(|this, _, _w, cx| this.split_right(cx)))
-                        .tooltip(simple_tooltip(tooltip_text::editor_split_right())),
+                        crate::ui::icon_button(("split", pane_index), Icon::Split, false, cx)
+                            .on_click(cx.listener(|this, _, _w, cx| this.split_right(cx)))
+                            .tooltip(simple_tooltip(tooltip_text::editor_split_right())),
                     ),
             )
             .child(content)

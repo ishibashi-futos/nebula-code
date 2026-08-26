@@ -687,7 +687,8 @@ impl EditorView {
                         // `\n- - abc` のようにマーカーが二重になる。マーカーを
                         // 打ち終わった後ろにいるときだけ継続する。
                         let column = sel.start() - rope.line_to_char(row);
-                        let after_marker = marker_end_column(&line).is_some_and(|end| column >= end);
+                        let after_marker =
+                            marker_end_column(&line).is_some_and(|end| column >= end);
                         if after_marker {
                             edits.push(Edit::replace(sel.range(), format!("\n{prefix}")));
                         } else {

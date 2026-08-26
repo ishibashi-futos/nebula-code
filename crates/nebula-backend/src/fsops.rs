@@ -12,9 +12,7 @@ pub async fn read_dir(root: &Path, path: &Path) -> Result<Vec<DirEntry>, Protoco
     let root = root.to_path_buf();
     let path = crate::buffers::normalize(path);
     if !path.starts_with(&root) {
-        return Err(ProtocolError::invalid(
-            "ワークスペースの外は一覧できません",
-        ));
+        return Err(ProtocolError::invalid("ワークスペースの外は一覧できません"));
     }
     tokio::task::spawn_blocking(move || read_dir_blocking(&root, &path))
         .await

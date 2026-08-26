@@ -175,7 +175,11 @@ struct RawCapture {
 /// tree-sitter の慣例に合わせて (1) 内側 (短い) のキャプチャが外側に勝ち、
 /// (2) 同じ範囲ならクエリ内で先に書かれたパターンが勝つ。
 /// 塗り絵方式で解決するので、優先度の低いものから順に上書きしていく。
-fn paint_spans(mut captures: Vec<RawCapture>, start_char: usize, end_char: usize) -> Vec<HighlightSpan> {
+fn paint_spans(
+    mut captures: Vec<RawCapture>,
+    start_char: usize,
+    end_char: usize,
+) -> Vec<HighlightSpan> {
     if captures.is_empty() {
         return Vec::new();
     }
@@ -303,11 +307,7 @@ mod tests {
 
         let sels = vec![Selection::caret(0)];
         let records = buffer
-            .edit(
-                &[Edit::insert(11, "\n    let x = 1;\n")],
-                &sels,
-                &sels,
-            )
+            .edit(&[Edit::insert(11, "\n    let x = 1;\n")], &sels, &sels)
             .unwrap();
         for record in &records {
             syntax.apply_edit(record);

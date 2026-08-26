@@ -123,7 +123,10 @@ impl GitService {
         // 全体が失敗する。先に切り分けて clean に回す。
         let listed = run(
             repo,
-            with_paths(&["ls-files", "--others", "--exclude-standard", "-z"], &paths),
+            with_paths(
+                &["ls-files", "--others", "--exclude-standard", "-z"],
+                &paths,
+            ),
         )
         .await?;
         let untracked: HashSet<PathBuf> = String::from_utf8_lossy(&listed)
@@ -751,7 +754,10 @@ mod tests {
         git(&other, &["push", "-q"]);
 
         service.pull(&dir).await.unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "three\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "three\n"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -776,7 +782,10 @@ mod tests {
         assert_eq!(all[0].body, "本文の説明");
         assert!(all[0].hash.starts_with(&all[0].short_hash));
 
-        let only_a = service.log(&dir, Some(&dir.join("a.txt")), 0).await.unwrap();
+        let only_a = service
+            .log(&dir, Some(&dir.join("a.txt")), 0)
+            .await
+            .unwrap();
         assert_eq!(only_a.len(), 1);
         assert_eq!(only_a[0].summary, "a を追加");
 
@@ -810,7 +819,10 @@ mod tests {
             .file_at_head(&dir, Path::new("/etc/hosts"))
             .await
             .unwrap_err();
-        assert_eq!(error.kind, nebula_protocol::ProtocolErrorKind::InvalidRequest);
+        assert_eq!(
+            error.kind,
+            nebula_protocol::ProtocolErrorKind::InvalidRequest
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -818,7 +830,10 @@ mod tests {
     async fn gitの失敗はstderrを載せて返る() {
         let dir = init_repo("failure");
         let service = GitService::new();
-        let error = service.checkout(&dir, "存在しない枝", false).await.unwrap_err();
+        let error = service
+            .checkout(&dir, "存在しない枝", false)
+            .await
+            .unwrap_err();
         assert_eq!(error.kind, nebula_protocol::ProtocolErrorKind::ExternalTool);
         assert!(!error.message.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();

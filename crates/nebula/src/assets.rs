@@ -57,7 +57,10 @@ static MONO_FONTS: &[&[u8]] = &[
 
 /// `TextSystem::add_fonts` に渡すための埋め込みフォント一覧。
 pub fn mono_font_bytes() -> Vec<Cow<'static, [u8]>> {
-    MONO_FONTS.iter().map(|bytes| Cow::Borrowed(*bytes)).collect()
+    MONO_FONTS
+        .iter()
+        .map(|bytes| Cow::Borrowed(*bytes))
+        .collect()
 }
 
 pub struct NebulaAssets;
@@ -200,7 +203,11 @@ mod tests {
     #[test]
     fn 埋め込みフォントは全ウェイトが非空でttfマジックナンバーを持つ() {
         let fonts = mono_font_bytes();
-        assert_eq!(fonts.len(), 4, "Regular/Bold/Italic/BoldItalic の4ウェイトが必要");
+        assert_eq!(
+            fonts.len(),
+            4,
+            "Regular/Bold/Italic/BoldItalic の4ウェイトが必要"
+        );
         for font in fonts {
             assert!(!font.is_empty(), "フォントデータが空");
             // TrueType は 0x00010000、OpenType (CFFアウトライン) は "OTTO" で始まる。

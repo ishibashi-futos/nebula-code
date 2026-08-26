@@ -109,10 +109,7 @@ pub fn move_selection(
     extend: bool,
 ) {
     // 選択がある状態で extend せずに左右移動した場合、選択端へ畳むのが一般的な挙動。
-    if !extend
-        && !selection.is_empty()
-        && matches!(movement, Movement::Grapheme)
-    {
+    if !extend && !selection.is_empty() && matches!(movement, Movement::Grapheme) {
         selection.head = match direction {
             Direction::Backward => selection.start(),
             Direction::Forward => selection.end(),
@@ -263,10 +260,7 @@ fn move_line_boundary(rope: &Rope, offset: usize, direction: Direction) -> usize
             let line_start = rope.line_to_char(row);
             // 行頭のインデントを飛ばした位置を優先し、既にそこにいるなら本当の行頭へ。
             let line = rope.line(row);
-            let indent = line
-                .chars()
-                .take_while(|c| *c == ' ' || *c == '\t')
-                .count();
+            let indent = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
             let first_non_ws = line_start + indent;
             if offset > first_non_ws {
                 first_non_ws
@@ -319,7 +313,9 @@ pub fn normalize(selections: &mut Vec<Selection>) {
     for sel in selections.iter().copied() {
         match merged.last_mut() {
             // 端が接するだけの隣接カーソルは別物として残し、真に重なる場合だけ併合する。
-            Some(last) if sel.start() < last.end() || (sel.is_empty() && last.is_empty() && sel.start() == last.start()) =>
+            Some(last)
+                if sel.start() < last.end()
+                    || (sel.is_empty() && last.is_empty() && sel.start() == last.start()) =>
             {
                 let start = last.start().min(sel.start());
                 let end = last.end().max(sel.end());
@@ -377,9 +373,21 @@ mod tests {
     fn 行頭移動はインデント位置を優先する() {
         let r = rope("    hello\n");
         let mut sel = Selection::caret(9);
-        move_selection(&r, &mut sel, Movement::LineBoundary, Direction::Backward, false);
+        move_selection(
+            &r,
+            &mut sel,
+            Movement::LineBoundary,
+            Direction::Backward,
+            false,
+        );
         assert_eq!(sel.head, 4, "インデントの直後");
-        move_selection(&r, &mut sel, Movement::LineBoundary, Direction::Backward, false);
+        move_selection(
+            &r,
+            &mut sel,
+            Movement::LineBoundary,
+            Direction::Backward,
+            false,
+        );
         assert_eq!(sel.head, 0, "2 回目で真の行頭");
     }
 
@@ -388,7 +396,11 @@ mod tests {
         let r = rope("abcdefgh\nxy\nabcdefgh\n");
         let mut sel = Selection::caret(6); // 1 行目の桁 6
         move_selection(&r, &mut sel, Movement::Line, Direction::Forward, false);
-        assert_eq!(r.offset_to_position(sel.head).column, 2, "短い行では行末に収まる");
+        assert_eq!(
+            r.offset_to_position(sel.head).column,
+            2,
+            "短い行では行末に収まる"
+        );
         move_selection(&r, &mut sel, Movement::Line, Direction::Forward, false);
         assert_eq!(r.offset_to_position(sel.head).column, 6, "元の桁に復帰する");
     }
@@ -398,7 +410,11 @@ mod tests {
         let r = rope("abc\ndef\nghijkl");
         let mut sel = Selection::caret(r.position_to_offset(Position::new(2, 2)));
         move_selection(&r, &mut sel, Movement::Line, Direction::Forward, false);
-        assert_eq!(sel.head, r.line_end_offset(2), "ゴール桁ではなく行末まで飛ぶ");
+        assert_eq!(
+            sel.head,
+            r.line_end_offset(2),
+            "ゴール桁ではなく行末まで飛ぶ"
+        );
     }
 
     #[test]
@@ -450,7 +466,10 @@ mod tests {
         let mut sel = Selection::new(1, r.position_to_offset(Position::new(2, 2)));
         move_selection(&r, &mut sel, Movement::Line, Direction::Forward, true);
         assert_eq!(sel.head, r.line_end_offset(2));
-        assert_eq!(sel.anchor, 1, "extend では anchor が固定されたままであること");
+        assert_eq!(
+            sel.anchor, 1,
+            "extend では anchor が固定されたままであること"
+        );
     }
 
     #[test]

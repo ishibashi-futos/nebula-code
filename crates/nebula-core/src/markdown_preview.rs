@@ -132,7 +132,11 @@ fn walk_list_item(node: Node, source: &str, depth: u8, out: &mut Vec<PreviewBloc
         .find(|c| c.kind() == "paragraph")
         .map(|p| paragraph_text(p, source))
         .unwrap_or_default();
-    out.push(PreviewBlock::ListItem { depth, marker, text });
+    out.push(PreviewBlock::ListItem {
+        depth,
+        marker,
+        text,
+    });
 
     let mut cursor = node.walk();
     if let Some(nested) = node.children(&mut cursor).find(|c| c.kind() == "list") {
@@ -298,12 +302,30 @@ mod tests {
         assert_eq!(
             parse_preview(src),
             vec![
-                PreviewBlock::Heading { level: 1, text: "h1".into() },
-                PreviewBlock::Heading { level: 2, text: "h2".into() },
-                PreviewBlock::Heading { level: 3, text: "h3".into() },
-                PreviewBlock::Heading { level: 4, text: "h4".into() },
-                PreviewBlock::Heading { level: 5, text: "h5".into() },
-                PreviewBlock::Heading { level: 6, text: "h6".into() },
+                PreviewBlock::Heading {
+                    level: 1,
+                    text: "h1".into()
+                },
+                PreviewBlock::Heading {
+                    level: 2,
+                    text: "h2".into()
+                },
+                PreviewBlock::Heading {
+                    level: 3,
+                    text: "h3".into()
+                },
+                PreviewBlock::Heading {
+                    level: 4,
+                    text: "h4".into()
+                },
+                PreviewBlock::Heading {
+                    level: 5,
+                    text: "h5".into()
+                },
+                PreviewBlock::Heading {
+                    level: 6,
+                    text: "h6".into()
+                },
             ]
         );
     }
@@ -314,8 +336,14 @@ mod tests {
         assert_eq!(
             parse_preview(src),
             vec![
-                PreviewBlock::Heading { level: 1, text: "見出し1".into() },
-                PreviewBlock::Heading { level: 2, text: "見出し2".into() },
+                PreviewBlock::Heading {
+                    level: 1,
+                    text: "見出し1".into()
+                },
+                PreviewBlock::Heading {
+                    level: 2,
+                    text: "見出し2".into()
+                },
             ]
         );
     }
@@ -324,7 +352,10 @@ mod tests {
     fn 中身の無い見出しはテキストが空文字になる() {
         assert_eq!(
             parse_preview("###\n"),
-            vec![PreviewBlock::Heading { level: 3, text: String::new() }]
+            vec![PreviewBlock::Heading {
+                level: 3,
+                text: String::new()
+            }]
         );
     }
 
@@ -332,7 +363,9 @@ mod tests {
     fn 段落を認識する() {
         assert_eq!(
             parse_preview("ただの段落です。\n"),
-            vec![PreviewBlock::Paragraph { text: "ただの段落です。".into() }]
+            vec![PreviewBlock::Paragraph {
+                text: "ただの段落です。".into()
+            }]
         );
     }
 
@@ -342,7 +375,9 @@ mod tests {
         // 強制改行ではないので、空白として描画するのが正しい。
         assert_eq!(
             parse_preview("1行目\n2行目です。\n"),
-            vec![PreviewBlock::Paragraph { text: "1行目 2行目です。".into() }]
+            vec![PreviewBlock::Paragraph {
+                text: "1行目 2行目です。".into()
+            }]
         );
     }
 
@@ -353,7 +388,9 @@ mod tests {
         // スペースでの再連結なら、行の**途中**にある全角スペースはそのまま残る。
         assert_eq!(
             parse_preview("全角　スペースを含む段落\n"),
-            vec![PreviewBlock::Paragraph { text: "全角　スペースを含む段落".into() }]
+            vec![PreviewBlock::Paragraph {
+                text: "全角　スペースを含む段落".into()
+            }]
         );
     }
 
@@ -363,8 +400,13 @@ mod tests {
         assert_eq!(
             parse_preview(src),
             vec![
-                PreviewBlock::Heading { level: 1, text: "日本語の見出し".into() },
-                PreviewBlock::Paragraph { text: "段落のテキストです。".into() },
+                PreviewBlock::Heading {
+                    level: 1,
+                    text: "日本語の見出し".into()
+                },
+                PreviewBlock::Paragraph {
+                    text: "段落のテキストです。".into()
+                },
                 PreviewBlock::ListItem {
                     depth: 0,
                     marker: ListMarker::Bullet,
@@ -421,9 +463,21 @@ mod tests {
         assert_eq!(
             parse_preview(src),
             vec![
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::Bullet, text: "親1".into() },
-                PreviewBlock::ListItem { depth: 1, marker: ListMarker::Bullet, text: "子".into() },
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::Bullet, text: "親2".into() },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::Bullet,
+                    text: "親1".into()
+                },
+                PreviewBlock::ListItem {
+                    depth: 1,
+                    marker: ListMarker::Bullet,
+                    text: "子".into()
+                },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::Bullet,
+                    text: "親2".into()
+                },
             ]
         );
     }
@@ -433,8 +487,16 @@ mod tests {
         assert_eq!(
             parse_preview("1. 一つ目\n2. 二つ目\n"),
             vec![
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::Ordered(1), text: "一つ目".into() },
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::Ordered(2), text: "二つ目".into() },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::Ordered(1),
+                    text: "一つ目".into()
+                },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::Ordered(2),
+                    text: "二つ目".into()
+                },
             ]
         );
     }
@@ -444,8 +506,16 @@ mod tests {
         assert_eq!(
             parse_preview("5. five\n6. six\n"),
             vec![
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::Ordered(5), text: "five".into() },
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::Ordered(6), text: "six".into() },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::Ordered(5),
+                    text: "five".into()
+                },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::Ordered(6),
+                    text: "six".into()
+                },
             ]
         );
     }
@@ -454,7 +524,11 @@ mod tests {
     fn 括弧区切りの順序付きリストも認識する() {
         assert_eq!(
             parse_preview("1) one\n"),
-            vec![PreviewBlock::ListItem { depth: 0, marker: ListMarker::Ordered(1), text: "one".into() }]
+            vec![PreviewBlock::ListItem {
+                depth: 0,
+                marker: ListMarker::Ordered(1),
+                text: "one".into()
+            }]
         );
     }
 
@@ -463,8 +537,16 @@ mod tests {
         assert_eq!(
             parse_preview("- [ ] 未完了\n- [x] 完了\n"),
             vec![
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::TaskUnchecked, text: "未完了".into() },
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::TaskChecked, text: "完了".into() },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::TaskUnchecked,
+                    text: "未完了".into()
+                },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::TaskChecked,
+                    text: "完了".into()
+                },
             ]
         );
     }
@@ -507,7 +589,10 @@ mod tests {
     fn 空のコードブロックはコードが空文字になる() {
         assert_eq!(
             parse_preview("```\n```\n"),
-            vec![PreviewBlock::CodeBlock { language: None, code: String::new() }]
+            vec![PreviewBlock::CodeBlock {
+                language: None,
+                code: String::new()
+            }]
         );
     }
 
@@ -515,7 +600,10 @@ mod tests {
     fn 引用を認識する() {
         assert_eq!(
             parse_preview("> 引用文\n"),
-            vec![PreviewBlock::Quote { depth: 1, text: "引用文".into() }]
+            vec![PreviewBlock::Quote {
+                depth: 1,
+                text: "引用文".into()
+            }]
         );
     }
 
@@ -523,7 +611,10 @@ mod tests {
     fn 複数行の引用はソフト改行を空白に潰して1つにまとまる() {
         assert_eq!(
             parse_preview("> 1行目\n> 2行目\n"),
-            vec![PreviewBlock::Quote { depth: 1, text: "1行目 2行目".into() }]
+            vec![PreviewBlock::Quote {
+                depth: 1,
+                text: "1行目 2行目".into()
+            }]
         );
     }
 
@@ -531,14 +622,21 @@ mod tests {
     fn 入れ子の引用は深さが2になる() {
         assert_eq!(
             parse_preview("> > ネスト引用\n"),
-            vec![PreviewBlock::Quote { depth: 2, text: "ネスト引用".into() }]
+            vec![PreviewBlock::Quote {
+                depth: 2,
+                text: "ネスト引用".into()
+            }]
         );
     }
 
     #[test]
     fn 水平線を認識する() {
         for src in ["---\n", "***\n", "___\n"] {
-            assert_eq!(parse_preview(src), vec![PreviewBlock::ThematicBreak], "{src} で失敗");
+            assert_eq!(
+                parse_preview(src),
+                vec![PreviewBlock::ThematicBreak],
+                "{src} で失敗"
+            );
         }
     }
 
@@ -548,12 +646,31 @@ mod tests {
         assert_eq!(
             parse_preview(src),
             vec![
-                PreviewBlock::Heading { level: 1, text: "タイトル".into() },
-                PreviewBlock::Paragraph { text: "段落です。".into() },
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::Bullet, text: "項目1".into() },
-                PreviewBlock::ListItem { depth: 0, marker: ListMarker::Bullet, text: "項目2".into() },
-                PreviewBlock::Heading { level: 2, text: "次の見出し".into() },
-                PreviewBlock::Quote { depth: 1, text: "引用".into() },
+                PreviewBlock::Heading {
+                    level: 1,
+                    text: "タイトル".into()
+                },
+                PreviewBlock::Paragraph {
+                    text: "段落です。".into()
+                },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::Bullet,
+                    text: "項目1".into()
+                },
+                PreviewBlock::ListItem {
+                    depth: 0,
+                    marker: ListMarker::Bullet,
+                    text: "項目2".into()
+                },
+                PreviewBlock::Heading {
+                    level: 2,
+                    text: "次の見出し".into()
+                },
+                PreviewBlock::Quote {
+                    depth: 1,
+                    text: "引用".into()
+                },
             ]
         );
     }

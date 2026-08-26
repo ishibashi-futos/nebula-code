@@ -87,7 +87,8 @@ async fn handle_connection(
     let event_task = tokio::spawn(forward_events(state.events.subscribe(), out_tx.clone()));
 
     // 進行中の要求。Cancel 要求で中断できるようにハンドルを持つ。
-    let inflight: Arc<Mutex<HashMap<RequestId, AbortHandle>>> = Arc::new(Mutex::new(HashMap::new()));
+    let inflight: Arc<Mutex<HashMap<RequestId, AbortHandle>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     let mut decoder = FrameDecoder::new();
     let mut chunk = vec![0u8; 64 * 1024];

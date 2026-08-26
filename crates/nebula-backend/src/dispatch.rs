@@ -40,9 +40,14 @@ pub async fn handle(
         ListWorkspaces => Ok(Response::Workspaces(workspace::list(state))),
 
         // -- ファイルシステム --
-        ReadDir { workspace: id, path } => {
+        ReadDir {
+            workspace: id,
+            path,
+        } => {
             let root = state.workspace_root(id)?;
-            fsops::read_dir(&root, &path).await.map(Response::DirEntries)
+            fsops::read_dir(&root, &path)
+                .await
+                .map(Response::DirEntries)
         }
         CreateFile { path } => fsops::create_file(&path).await.map(|_| Response::Ack),
         CreateDir { path } => fsops::create_dir(&path).await.map(|_| Response::Ack),
@@ -51,15 +56,19 @@ pub async fn handle(
             fsops::delete(&path, recursive).await.map(|_| Response::Ack)
         }
         CopyPath { from, to } => fsops::copy(&from, &to).await.map(|_| Response::Ack),
-        WatchPath { workspace: id, path } => {
+        WatchPath {
+            workspace: id,
+            path,
+        } => {
             state.watcher.watch(id, &path)?;
             Ok(Response::Ack)
         }
 
         // -- バッファ --
-        OpenBuffer { workspace: id, path } => {
-            buffers::open(state, id, path).await.map(Response::Buffer)
-        }
+        OpenBuffer {
+            workspace: id,
+            path,
+        } => buffers::open(state, id, path).await.map(Response::Buffer),
         CreateScratchBuffer {
             workspace: id,
             language,
@@ -83,7 +92,10 @@ pub async fn handle(
         MarkdownPreview { buffer } => buffers::markdown_preview(state, buffer),
 
         // -- 検索 --
-        StartSearch { workspace: id, query } => {
+        StartSearch {
+            workspace: id,
+            query,
+        } => {
             let root = state.workspace_root(id)?;
             state
                 .search
@@ -112,8 +124,10 @@ pub async fn handle(
             replacement,
         } => {
             let root = state.workspace_root(id)?;
-            let (files_changed, replacements) =
-                state.search.replace_all(&root, &query, &replacement).await?;
+            let (files_changed, replacements) = state
+                .search
+                .replace_all(&root, &query, &replacement)
+                .await?;
             Ok(Response::ReplaceResult {
                 files_changed,
                 replacements,
@@ -137,23 +151,35 @@ pub async fn handle(
                 .await
                 .map(Response::GitHunks)
         }
-        GitBlame { workspace: id, path } => {
+        GitBlame {
+            workspace: id,
+            path,
+        } => {
             let repo = state.git_root(id)?;
             state.git.blame(&repo, &path).await.map(Response::GitBlame)
         }
-        GitStage { workspace: id, paths } => {
+        GitStage {
+            workspace: id,
+            paths,
+        } => {
             let repo = state.git_root(id)?;
             state.git.stage(&repo, &paths).await?;
             emit_git_status(state, id).await;
             Ok(Response::Ack)
         }
-        GitUnstage { workspace: id, paths } => {
+        GitUnstage {
+            workspace: id,
+            paths,
+        } => {
             let repo = state.git_root(id)?;
             state.git.unstage(&repo, &paths).await?;
             emit_git_status(state, id).await;
             Ok(Response::Ack)
         }
-        GitDiscardChanges { workspace: id, paths } => {
+        GitDiscardChanges {
+            workspace: id,
+            paths,
+        } => {
             let repo = state.git_root(id)?;
             state.git.discard(&repo, &paths).await?;
             emit_git_status(state, id).await;
@@ -195,7 +221,10 @@ pub async fn handle(
                 .await
                 .map(Response::GitLog)
         }
-        GitFileAtHead { workspace: id, path } => {
+        GitFileAtHead {
+            workspace: id,
+            path,
+        } => {
             let repo = state.git_root(id)?;
             state
                 .git
@@ -311,7 +340,10 @@ pub async fn handle(
                 .map(Response::WorkspaceEdit)
         }
         LspServerStatuses { .. } => Ok(Response::LspServerStatuses(state.lsp.statuses())),
-        LspRestartServer { workspace: id, language } => {
+        LspRestartServer {
+            workspace: id,
+            language,
+        } => {
             let root = state.workspace_root(id)?;
             state.lsp.restart(&root, &language).await?;
             Ok(Response::Ack)
@@ -399,10 +431,7 @@ pub async fn handle(
         CodexListModels => state.codex.list_models().await.map(Response::CodexModels),
         CodexAuthStatus => {
             let (logged_in, account) = state.codex.auth_status().await?;
-            Ok(Response::CodexAuth {
-                logged_in,
-                account,
-            })
+            Ok(Response::CodexAuth { logged_in, account })
         }
     }
 }

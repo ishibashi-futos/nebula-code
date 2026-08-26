@@ -80,7 +80,11 @@ async fn rust_analyzer_のホバーが返る() {
         }
     };
 
-    println!("{:?} でホバーが返った:\n{}", started.elapsed(), hover.contents);
+    println!(
+        "{:?} でホバーが返った:\n{}",
+        started.elapsed(),
+        hover.contents
+    );
     // ropey の Rope 型に当たっていれば型名が本文に出る。
     assert!(
         hover.contents.contains("Rope"),
@@ -90,7 +94,10 @@ async fn rust_analyzer_のホバーが返る() {
 
     // 索引付けが済んだ後なら他の要求もすぐ返る。まとめて経路を確認する。
     let symbols = service.document_symbols(&path).await.expect("シンボル一覧");
-    println!("シンボル: {:?}", symbols.iter().map(|s| &s.name).collect::<Vec<_>>());
+    println!(
+        "シンボル: {:?}",
+        symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+    );
     assert!(
         symbols.iter().any(|symbol| symbol.name == "TextBuffer"),
         "TextBuffer が一覧にない"

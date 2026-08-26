@@ -16,7 +16,9 @@ use std::time::SystemTime;
 /// バイトでも UTF-16 でもなく char を採る理由は、ropey の索引単位と一致し、
 /// GUI 側で追加の変換なしにカーソル移動を扱えるため。LSP との UTF-16 変換は
 /// バックエンドの LSP 層に閉じ込める。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub struct Position {
     pub row: u32,
     pub column: u32,

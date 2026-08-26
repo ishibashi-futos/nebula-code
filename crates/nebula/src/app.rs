@@ -337,8 +337,9 @@ impl NebulaApp {
             self.panel_height = px(height);
         }
         self.sidebar_visible = session.sidebar_visible;
-        self.explorer
-            .update(cx, |v, cx| v.set_show_hidden(session.explorer_show_hidden, cx));
+        self.explorer.update(cx, |v, cx| {
+            v.set_show_hidden(session.explorer_show_hidden, cx)
+        });
         self.restoring_active = session.active.clone();
         for root in session.workspaces {
             // セッション復元由来なので activate=false: 復元対象のフォルダだけを
@@ -877,17 +878,19 @@ impl NebulaApp {
                         .tooltip(simple_tooltip(tooltip_text::show_codex())),
                     ),
             )
-            .child(v_flex().pb(px(8.)).items_center().child(
-                icon_button("act-settings", Icon::Settings, false, cx)
-                    .on_click(cx.listener(|this, _, _w, cx| {
-                        this.notify_status(
-                            NotificationLevel::Info,
-                            "設定画面は今後の実装対象です".to_string(),
-                            cx,
-                        );
-                    }))
-                    .tooltip(simple_tooltip(tooltip_text::SETTINGS)),
-            ))
+            .child(
+                v_flex().pb(px(8.)).items_center().child(
+                    icon_button("act-settings", Icon::Settings, false, cx)
+                        .on_click(cx.listener(|this, _, _w, cx| {
+                            this.notify_status(
+                                NotificationLevel::Info,
+                                "設定画面は今後の実装対象です".to_string(),
+                                cx,
+                            );
+                        }))
+                        .tooltip(simple_tooltip(tooltip_text::SETTINGS)),
+                ),
+            )
             .into_any_element()
     }
 

@@ -22,8 +22,8 @@ use crate::ui::{
 };
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, CursorStyle, Entity, Hsla, MouseButton, Pixels, Subscription, Window,
-    div, px, uniform_list,
+    AnyElement, Context, CursorStyle, Entity, Hsla, MouseButton, Pixels, Subscription, Window, div,
+    px, uniform_list,
 };
 use nebula_protocol::{Diagnostic, DiagnosticSeverity, Event, Position};
 use std::collections::HashSet;
@@ -237,10 +237,7 @@ fn split_label(label: &str) -> (&str, &str) {
 /// rustc の診断は改行と連続空白を含む。そのまま行に流すと高さが崩れ、
 /// `uniform_list` の「全行同じ高さ」という前提が壊れる。
 fn one_line(message: &str) -> String {
-    let flattened: String = message
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let flattened: String = message.split_whitespace().collect::<Vec<_>>().join(" ");
     if flattened.chars().count() <= MAX_MESSAGE_CHARS {
         return flattened;
     }
@@ -292,8 +289,7 @@ pub struct ProblemsView {
 
 impl ProblemsView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let filter =
-            cx.new(|cx| TextInput::single_line("問題を絞り込む (メッセージ・パス)", cx));
+        let filter = cx.new(|cx| TextInput::single_line("問題を絞り込む (メッセージ・パス)", cx));
         let subscription = cx.subscribe(&filter, |this, input, event, cx| match event {
             TextInputEvent::Changed => {
                 this.query = input.read(cx).text().to_string();
@@ -725,10 +721,7 @@ mod tests {
                 &[診断(DiagnosticSeverity::Error, 0, "e")],
             );
         }
-        let paths: Vec<&str> = store
-            .iter()
-            .filter_map(|(p, _)| p.to_str())
-            .collect();
+        let paths: Vec<&str> = store.iter().filter_map(|(p, _)| p.to_str()).collect();
         assert_eq!(paths, vec!["/w/a.rs", "/w/b.rs", "/w/c.rs"]);
     }
 

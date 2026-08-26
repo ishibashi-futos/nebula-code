@@ -80,7 +80,10 @@ mod tests {
 
     #[test]
     fn ドメイン付きユーザー名からもパイプ名を作れる() {
-        assert_eq!(sanitize_pipe_component(r"CORP\Yamada Taro"), "CORP-Yamada-Taro");
+        assert_eq!(
+            sanitize_pipe_component(r"CORP\Yamada Taro"),
+            "CORP-Yamada-Taro"
+        );
     }
 
     #[test]
@@ -98,6 +101,9 @@ mod tests {
     fn 既定のエンドポイントはパイプ名前空間に載る() {
         let endpoint = default_endpoint();
         let name = endpoint.to_string_lossy();
-        assert!(name.starts_with(r"\\.\pipe\"), "パイプ名になっていない: {name}");
+        assert!(
+            name.starts_with(r"\\.\pipe\"),
+            "パイプ名になっていない: {name}"
+        );
     }
 }

@@ -118,9 +118,10 @@ pub async fn apply_edits(
             return Err(ProtocolError::invalid("読み取り専用のバッファです"));
         }
         let selections = vec![Selection::caret(0)];
-        let records = entry
-            .buffer
-            .apply_versioned(base_version, &edits, &selections, &selections)?;
+        let records =
+            entry
+                .buffer
+                .apply_versioned(base_version, &edits, &selections, &selections)?;
         if let Some(syntax) = entry.syntax.as_mut() {
             for record in &records {
                 syntax.apply_edit(record);

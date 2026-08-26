@@ -6,8 +6,7 @@
 use nebula_protocol::{GitBranch, GitCommitInfo};
 
 /// `for-each-ref` の書式。タブ区切り。枝名にタブは入れられないので衝突しない。
-pub const BRANCH_FORMAT: &str =
-    "%(refname)%09%(HEAD)%09%(upstream:short)%09%(contents:subject)";
+pub const BRANCH_FORMAT: &str = "%(refname)%09%(HEAD)%09%(upstream:short)%09%(contents:subject)";
 
 /// `log` の書式。コミット本文には改行もタブも入るため、印字されない
 /// 単位区切り (0x1f) とレコード区切り (0x1e) を使う。

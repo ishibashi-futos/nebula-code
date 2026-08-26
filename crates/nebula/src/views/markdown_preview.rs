@@ -139,8 +139,14 @@ fn render_block(block: &PreviewBlock, theme: &Theme) -> AnyElement {
             .text_color(theme.text)
             .child(text.clone())
             .into_any_element(),
-        PreviewBlock::ListItem { depth, marker, text } => render_list_item(*depth, marker, text, theme),
-        PreviewBlock::CodeBlock { language, code } => render_code_block(language.as_deref(), code, theme),
+        PreviewBlock::ListItem {
+            depth,
+            marker,
+            text,
+        } => render_list_item(*depth, marker, text, theme),
+        PreviewBlock::CodeBlock { language, code } => {
+            render_code_block(language.as_deref(), code, theme)
+        }
         PreviewBlock::Quote { depth, text } => render_quote(*depth, text, theme),
         PreviewBlock::ThematicBreak => div().h(px(1.)).w_full().bg(theme.border).into_any_element(),
     }

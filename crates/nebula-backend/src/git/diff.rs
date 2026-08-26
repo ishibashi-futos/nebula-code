@@ -11,7 +11,6 @@ use nebula_protocol::{DiffHunk, HunkKind};
 // unified diff の解析
 // ---------------------------------------------------------------------------
 
-
 fn kind_of(old_lines: u32, new_lines: u32) -> HunkKind {
     match (old_lines, new_lines) {
         (0, _) => HunkKind::Added,
@@ -112,8 +111,8 @@ fn myers_trace(old: &[&str], new: &[&str]) -> Option<Vec<Vec<isize>>> {
         while k <= d {
             // 下に進む (new 側の行を挿入) か、右に進む (old 側の行を削除) かを、
             // 到達点が遠い方を選ぶ形で決める。
-            let go_down =
-                k == -d || (k != d && reach[(k - 1 + offset) as usize] < reach[(k + 1 + offset) as usize]);
+            let go_down = k == -d
+                || (k != d && reach[(k - 1 + offset) as usize] < reach[(k + 1 + offset) as usize]);
             let mut x = if go_down {
                 reach[(k + 1 + offset) as usize]
             } else {
@@ -194,12 +193,6 @@ fn backtrack(trace: &[Vec<isize>], n: usize, m: usize) -> Vec<Change> {
 mod tests {
     use super::*;
 
-
-
-
-
-
-
     // -- 自前の行差分 --
 
     #[test]
@@ -234,7 +227,10 @@ mod tests {
         assert_eq!(hunks[0].kind, HunkKind::Removed);
         assert_eq!((hunks[0].old_start, hunks[0].old_lines), (1, 2));
         assert_eq!((hunks[0].new_start, hunks[0].new_lines), (1, 0));
-        assert_eq!(hunks[0].removed_text, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(
+            hunks[0].removed_text,
+            vec!["b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -258,7 +254,10 @@ mod tests {
         let hunks = line_diff("a\nb\n", "");
         assert_eq!(hunks.len(), 1);
         assert_eq!(hunks[0].kind, HunkKind::Removed);
-        assert_eq!(hunks[0].removed_text, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            hunks[0].removed_text,
+            vec!["a".to_string(), "b".to_string()]
+        );
     }
 
     #[test]

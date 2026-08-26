@@ -6,11 +6,17 @@ pub type Result<T> = std::result::Result<T, CoreError>;
 #[derive(Debug)]
 pub enum CoreError {
     /// 指定オフセットがバッファ長を超えている。
-    OutOfBounds { offset: usize, len: usize },
+    OutOfBounds {
+        offset: usize,
+        len: usize,
+    },
     /// 1 回の適用に渡された編集どうしが重なっている。
     OverlappingEdits,
     /// 編集の基準版数が現在の版数と一致しない。
-    VersionMismatch { expected: u64, actual: u64 },
+    VersionMismatch {
+        expected: u64,
+        actual: u64,
+    },
     /// 構文解析に失敗した。
     Parse(String),
     Io(std::io::Error),

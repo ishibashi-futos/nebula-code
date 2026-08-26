@@ -101,7 +101,10 @@ fn completion_item(item: lsp::CompletionItem, text: &str) -> CompletionItem {
 
     CompletionItem {
         label: item.label,
-        kind: item.kind.map(completion_kind).unwrap_or(CompletionKind::Text),
+        kind: item
+            .kind
+            .map(completion_kind)
+            .unwrap_or(CompletionKind::Text),
         detail: item.detail,
         documentation: item.documentation.map(documentation),
         insert_text,
@@ -160,9 +163,7 @@ pub fn flatten_definition(response: lsp::GotoDefinitionResponse) -> Vec<(PathBuf
         lsp::GotoDefinitionResponse::Array(locations) => flatten_locations(locations),
         lsp::GotoDefinitionResponse::Link(links) => links
             .into_iter()
-            .filter_map(|link| {
-                Some((uri_to_path(&link.target_uri)?, link.target_selection_range))
-            })
+            .filter_map(|link| Some((uri_to_path(&link.target_uri)?, link.target_selection_range)))
             .collect(),
     }
 }
@@ -272,11 +273,12 @@ pub fn text_edits(edits: Vec<lsp::TextEdit>, text: &str) -> Vec<TextEditOp> {
 /// [`WorkspaceEdit`]: nebula_protocol::WorkspaceEdit
 pub fn flatten_workspace_edit(edit: lsp::WorkspaceEdit) -> Vec<(PathBuf, Vec<lsp::TextEdit>)> {
     let mut result: Vec<(PathBuf, Vec<lsp::TextEdit>)> = Vec::new();
-    let mut push = |path: PathBuf, edits: Vec<lsp::TextEdit>| {
-        match result.iter_mut().find(|(p, _)| *p == path) {
-            Some((_, existing)) => existing.extend(edits),
-            None => result.push((path, edits)),
-        }
+    let mut push = |path: PathBuf, edits: Vec<lsp::TextEdit>| match result
+        .iter_mut()
+        .find(|(p, _)| *p == path)
+    {
+        Some((_, existing)) => existing.extend(edits),
+        None => result.push((path, edits)),
     };
 
     if let Some(changes) = edit.changes {

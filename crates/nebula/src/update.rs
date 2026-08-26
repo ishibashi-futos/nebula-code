@@ -340,7 +340,10 @@ pub enum UpdateError {
     /// タグ名がバージョン形式でない、等)。
     InvalidResponse(String),
     /// 現在の OS/アーキテクチャ向けの配布物が存在しない。
-    UnsupportedPlatform { os: &'static str, arch: &'static str },
+    UnsupportedPlatform {
+        os: &'static str,
+        arch: &'static str,
+    },
     /// リリースに必要なアセットが含まれていない。
     AssetNotFound(String),
     /// 書き込み権限が無い (EACCES/EPERM)。
@@ -572,9 +575,9 @@ fn sibling_path(target: &Path, prefix: &str, suffix: &str) -> Result<PathBuf, Up
     let dir = target.parent().ok_or_else(|| {
         UpdateError::Io(format!("{} の置き場所を特定できません", target.display()))
     })?;
-    let file_name = target.file_name().ok_or_else(|| {
-        UpdateError::Io(format!("{} はファイル名を持ちません", target.display()))
-    })?;
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| UpdateError::Io(format!("{} はファイル名を持ちません", target.display())))?;
     Ok(dir.join(format!("{prefix}{}{suffix}", file_name.to_string_lossy())))
 }
 
@@ -1108,7 +1111,10 @@ mod tests {
         assert!(Version::parse("1.2.3.4").is_none(), "セグメントが多すぎる");
         assert!(Version::parse("1.two.3").is_none(), "数値でない");
         assert!(Version::parse("").is_none(), "空文字列");
-        assert!(Version::parse("abc").is_none(), "バージョンに見えない文字列");
+        assert!(
+            Version::parse("abc").is_none(),
+            "バージョンに見えない文字列"
+        );
     }
 
     // --- アセット名の解決 ---
@@ -1302,7 +1308,8 @@ mod tests {
     #[test]
     fn 必須フィールドが欠けたjsonは解析エラーになる() {
         // GitHub の 404 応答自体もこの形 (tag_name も assets も無い)。
-        let not_found = r#"{"message": "Not Found", "documentation_url": "https://docs.github.com"}"#;
+        let not_found =
+            r#"{"message": "Not Found", "documentation_url": "https://docs.github.com"}"#;
         assert!(parse_release_json(not_found).is_err());
     }
 

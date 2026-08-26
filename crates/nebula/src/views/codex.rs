@@ -12,10 +12,10 @@
 //!    「封をする」。封をしないと、次のターンの 1 文字目が前のターンの応答に続いてしまう。
 //! 3. **状態遷移は描画から切り離した純粋関数に置く。** gpui を起動せずに単体テストできる。
 
-use crate::ui::format_keystroke;
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{metrics, theme};
+use crate::ui::format_keystroke;
 use crate::ui::{
     TextInput, TextInputEvent, h_flex, icon, list_row, panel_header, truncate_middle, v_flex,
 };
@@ -423,9 +423,8 @@ pub struct CodexView {
 impl CodexView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         // Enter で送信、Shift+Enter で改行。伸びても MAX_INPUT_ROWS 行で止める。
-        let input = cx.new(|cx| {
-            TextInput::multi_line("Codex に指示を出す…", 1, Some(MAX_INPUT_ROWS), cx)
-        });
+        let input =
+            cx.new(|cx| TextInput::multi_line("Codex に指示を出す…", 1, Some(MAX_INPUT_ROWS), cx));
         let subscriptions = vec![cx.subscribe(&input, Self::on_input_event)];
         Self {
             client: None,

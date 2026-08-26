@@ -61,7 +61,9 @@ fn content_length(header: &str) -> Result<usize, ProtocolError> {
                 .then(|| value.trim().parse::<usize>().ok())?
         })
         .ok_or_else(|| {
-            ProtocolError::external(format!("LSP のヘッダに Content-Length がありません: {header:?}"))
+            ProtocolError::external(format!(
+                "LSP のヘッダに Content-Length がありません: {header:?}"
+            ))
         })
 }
 

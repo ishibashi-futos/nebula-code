@@ -152,7 +152,10 @@ impl Session {
         };
         if let Err(e) = self.try_save_to(&path) {
             if crate::trace_startup() {
-                eprintln!("nebula: セッションを保存できません ({}): {e}", path.display());
+                eprintln!(
+                    "nebula: セッションを保存できません ({}): {e}",
+                    path.display()
+                );
             }
         }
     }
@@ -323,7 +326,13 @@ mod tests {
 
         // Windows: どちらも無ければ諦める。HOME があっても使わない。
         assert_eq!(
-            config_dir_from(TargetOs::Windows, None, Some(PathBuf::from("/x")), None, None),
+            config_dir_from(
+                TargetOs::Windows,
+                None,
+                Some(PathBuf::from("/x")),
+                None,
+                None
+            ),
             None,
         );
 
@@ -339,8 +348,14 @@ mod tests {
         assert!(other.ends_with(".config/nebula"));
 
         // macOS / それ以外: HOME が無ければ諦める (既存の挙動を変えない)
-        assert_eq!(config_dir_from(TargetOs::Macos, None, None, None, None), None);
-        assert_eq!(config_dir_from(TargetOs::Other, None, None, None, None), None);
+        assert_eq!(
+            config_dir_from(TargetOs::Macos, None, None, None, None),
+            None
+        );
+        assert_eq!(
+            config_dir_from(TargetOs::Other, None, None, None, None),
+            None
+        );
 
         // XDG_CONFIG_HOME が明示されていれば OS を問わず最優先する
         let xdg = config_dir_from(
@@ -367,10 +382,8 @@ mod tests {
     /// `create_dir_all` はどの OS でも、権限に関係なく必ず失敗する。
     #[test]
     fn 書き込めない場所への保存は失敗を返す() {
-        let blocker = std::env::temp_dir().join(format!(
-            "nebula-session-blocker-{}",
-            std::process::id()
-        ));
+        let blocker =
+            std::env::temp_dir().join(format!("nebula-session-blocker-{}", std::process::id()));
         std::fs::write(&blocker, "これはディレクトリではない").unwrap();
 
         let session = Session::default();

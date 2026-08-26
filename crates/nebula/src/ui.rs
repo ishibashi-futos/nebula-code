@@ -188,12 +188,7 @@ pub fn simple_tooltip(
     text: impl Into<SharedString>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let text = text.into();
-    move |_window, cx| {
-        cx.new(|_cx| SimpleTooltip {
-            text: text.clone(),
-        })
-        .into()
-    }
+    move |_window, cx| cx.new(|_cx| SimpleTooltip { text: text.clone() }).into()
 }
 
 struct SimpleTooltip {
@@ -769,8 +764,7 @@ impl InputState {
     /// 確定した文字列を差し込む。
     pub fn replace(&mut self, range_utf16: Option<Range<usize>>, new_text: &str) {
         let range = self.target_range(range_utf16);
-        self.text
-            .replace_range(range.clone(), new_text);
+        self.text.replace_range(range.clone(), new_text);
         let caret = range.start + new_text.len();
         self.selected_range = caret..caret;
         // 逆向きの選択を消したあとに向きが残っていると、次の Shift+矢印が
@@ -927,7 +921,6 @@ fn text_input_navigation_keymap(ctx: Option<&'static str>) -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-right", InputSelectWordRight, ctx),
     ]
 }
-
 
 // ---------------------------------------------------------------------------
 // 設定と出来事
@@ -1207,7 +1200,10 @@ impl TextInput {
     }
 
     fn on_word_right(&mut self, _: &InputWordRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(next_word_boundary(&self.state.text, self.state.cursor()), cx);
+        self.move_to(
+            next_word_boundary(&self.state.text, self.state.cursor()),
+            cx,
+        );
     }
 
     fn on_select_word_left(
@@ -1228,7 +1224,10 @@ impl TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.select_to(next_word_boundary(&self.state.text, self.state.cursor()), cx);
+        self.select_to(
+            next_word_boundary(&self.state.text, self.state.cursor()),
+            cx,
+        );
     }
 
     fn on_line_start(&mut self, _: &InputLineStart, _: &mut Window, cx: &mut Context<Self>) {
@@ -1366,7 +1365,12 @@ impl TextInput {
 
     // -- マウス --
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus_handle);
         self.is_selecting = true;
         let offset = self.offset_for_window_point(event.position);
@@ -1560,9 +1564,7 @@ impl Render for TextInput {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .child(TextInputElement {
-                input: cx.entity(),
-            })
+            .child(TextInputElement { input: cx.entity() })
     }
 }
 
@@ -1639,9 +1641,10 @@ fn shape_input(
     font_size: Pixels,
     wrap_width: Option<Pixels>,
 ) -> Vec<(WrappedLine, usize)> {
-    let Ok(lines) = window
-        .text_system()
-        .shape_text(text.clone(), font_size, runs, wrap_width, None)
+    let Ok(lines) =
+        window
+            .text_system()
+            .shape_text(text.clone(), font_size, runs, wrap_width, None)
     else {
         return Vec::new();
     };
@@ -1658,12 +1661,7 @@ fn shape_input(
 }
 
 /// 未確定 (IME 変換中) の部分にだけ下線を引く描画指定。
-fn marked_runs(
-    text: &str,
-    font: Font,
-    color: Hsla,
-    marked: Option<&Range<usize>>,
-) -> Vec<TextRun> {
+fn marked_runs(text: &str, font: Font, color: Hsla, marked: Option<&Range<usize>>) -> Vec<TextRun> {
     let base = TextRun {
         len: text.len(),
         font,
@@ -1791,24 +1789,25 @@ impl Element for TextInputElement {
         let max_rows = input.config.max_rows;
         let entity = self.input.clone();
         // 折り返しの数は幅が決まらないと分からないので、測定つきで頼む。
-        let layout_id = window.request_measured_layout(style, move |known, available, window, cx| {
-            let wrap_width = known.width.or(match available.width {
-                AvailableSpace::Definite(width) => Some(width),
-                _ => None,
+        let layout_id =
+            window.request_measured_layout(style, move |known, available, window, cx| {
+                let wrap_width = known.width.or(match available.width {
+                    AvailableSpace::Definite(width) => Some(width),
+                    _ => None,
+                });
+                let text = entity.read(cx).display_text();
+                let runs = marked_runs(&text, font.clone(), gpui::black(), None);
+                let lines = shape_input(window, &text, &runs, font_size, wrap_width);
+                let rows: usize = lines
+                    .iter()
+                    .map(|(line, _)| InputLayout::rows_of(line))
+                    .sum();
+                let rows = rows.max(min_rows).min(max_rows.unwrap_or(usize::MAX));
+                Size {
+                    width: wrap_width.unwrap_or(px(0.)),
+                    height: line_height * rows.max(1) as f32,
+                }
             });
-            let text = entity.read(cx).display_text();
-            let runs = marked_runs(&text, font.clone(), gpui::black(), None);
-            let lines = shape_input(window, &text, &runs, font_size, wrap_width);
-            let rows: usize = lines
-                .iter()
-                .map(|(line, _)| InputLayout::rows_of(line))
-                .sum();
-            let rows = rows.max(min_rows).min(max_rows.unwrap_or(usize::MAX));
-            Size {
-                width: wrap_width.unwrap_or(px(0.)),
-                height: line_height * rows.max(1) as f32,
-            }
-        });
         (layout_id, ())
     }
 
@@ -1858,9 +1857,8 @@ impl Element for TextInputElement {
         };
 
         // キャレットが枠に入るまで表示開始行をずらす。入力が伸びても打っている行が見える。
-        let visible_rows = ((f32::from(bounds.size.height) / f32::from(line_height)).floor()
-            as usize)
-            .max(1);
+        let visible_rows =
+            ((f32::from(bounds.size.height) / f32::from(line_height)).floor() as usize).max(1);
         let cursor_point = layout.point_for_offset(if is_placeholder { 0 } else { cursor_offset });
         let cursor_row = cursor_point
             .map(|p| (f32::from(p.y) / f32::from(line_height)).round() as usize)
@@ -1999,7 +1997,10 @@ mod tests {
     /// Windows/Linux では ⌘ も ⌥ も通じない。語を `+` でつないで書く。
     #[test]
     fn windows_のキーバインド表記は語を繋げて書く() {
-        assert_eq!(format_keystroke_as("secondary-shift-p", false), "Ctrl+Shift+P");
+        assert_eq!(
+            format_keystroke_as("secondary-shift-p", false),
+            "Ctrl+Shift+P"
+        );
         assert_eq!(format_keystroke_as("ctrl-`", false), "Ctrl+`");
         assert_eq!(format_keystroke_as("secondary-enter", false), "Ctrl+Enter");
         assert_eq!(format_keystroke_as("alt-shift-left", false), "Alt+Shift+←");
@@ -2017,7 +2018,10 @@ mod tests {
     /// `secondary-k secondary-i` のような連続打鍵は空白区切りのまま扱う。
     #[test]
     fn 連続打鍵は空白で区切ったまま表示する() {
-        assert_eq!(format_keystroke_as("secondary-k secondary-i", true), "⌘K ⌘I");
+        assert_eq!(
+            format_keystroke_as("secondary-k secondary-i", true),
+            "⌘K ⌘I"
+        );
         assert_eq!(
             format_keystroke_as("secondary-k secondary-i", false),
             "Ctrl+K Ctrl+I"
@@ -2042,7 +2046,10 @@ mod tests {
         use crate::actions::keys;
         assert_eq!(
             tooltip_text::add_workspace(),
-            format!("ワークスペースを追加 ({})", format_keystroke(keys::OPEN_FOLDER))
+            format!(
+                "ワークスペースを追加 ({})",
+                format_keystroke(keys::OPEN_FOLDER)
+            )
         );
         assert_eq!(
             tooltip_text::editor_split_right(),
@@ -2091,7 +2098,10 @@ mod tests {
 
     #[test]
     fn ワークスペース切り替えの文言に名前が含まれる() {
-        assert_eq!(tooltip_text::workspace_switch("Nebula"), "Nebula に切り替え");
+        assert_eq!(
+            tooltip_text::workspace_switch("Nebula"),
+            "Nebula に切り替え"
+        );
     }
 
     // -----------------------------------------------------------------
@@ -2390,10 +2400,7 @@ mod tests {
 
     #[test]
     fn 複数行欄は貼り付けた改行をそのまま通す() {
-        assert_eq!(
-            sanitize_insert("a\nb", true, NewlinePolicy::Strip),
-            "a\nb"
-        );
+        assert_eq!(sanitize_insert("a\nb", true, NewlinePolicy::Strip), "a\nb");
     }
 
     #[test]

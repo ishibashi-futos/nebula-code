@@ -5,11 +5,11 @@
 //! 取り違え (要求と応答の型がずれている等) が見つからないため、ここで通しで確認する。
 
 use nebula_backend::{BackendState, ipc, tools};
+use nebula_protocol::transport::{Stream, connect};
 use nebula_protocol::{
     ClientMessage, Edit, FrameDecoder, ListMarker, PROTOCOL_VERSION, PreviewBlock, Request,
     RequestId, Response, ServerMessage, TextRange, encode_frame,
 };
-use nebula_protocol::transport::{Stream, connect};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;

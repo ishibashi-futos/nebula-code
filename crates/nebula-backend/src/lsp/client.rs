@@ -175,7 +175,10 @@ impl Client {
         fail_all(&self.pending, "言語サーバーを停止しました");
     }
 
-    fn pending(&self) -> std::sync::MutexGuard<'_, HashMap<i64, oneshot::Sender<Result<Value, ProtocolError>>>> {
+    fn pending(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<i64, oneshot::Sender<Result<Value, ProtocolError>>>>
+    {
         self.pending.lock().expect("待機中要求のロック")
     }
 }
@@ -292,10 +295,14 @@ mod tests {
         let (program, args) = dummy_program(DummyKind::Silent);
         // `/` は Windows では起動先を特定できないおそれがあるため、OS を問わず
         // 必ず存在する一時ディレクトリを作業ディレクトリにする。
-        let (client, _incoming) = Client::spawn(program, args, &std::env::temp_dir())
-            .expect("ダミーサーバーの起動");
+        let (client, _incoming) =
+            Client::spawn(program, args, &std::env::temp_dir()).expect("ダミーサーバーの起動");
         let error = client
-            .request("textDocument/hover", Value::Null, Duration::from_millis(200))
+            .request(
+                "textDocument/hover",
+                Value::Null,
+                Duration::from_millis(200),
+            )
             .await
             .expect_err("応答は返らない");
         assert_eq!(error.kind, ProtocolErrorKind::ExternalTool);
@@ -307,8 +314,8 @@ mod tests {
     async fn 相手が終了すると待機中の要求は即座に失敗する() {
         // ダミーサーバーは何も出力せずすぐ終わる。標準出力が閉じた時点で失敗すべき。
         let (program, args) = dummy_program(DummyKind::ExitImmediately);
-        let (client, _incoming) = Client::spawn(program, args, &std::env::temp_dir())
-            .expect("ダミーサーバーの起動");
+        let (client, _incoming) =
+            Client::spawn(program, args, &std::env::temp_dir()).expect("ダミーサーバーの起動");
         let error = client
             // タイムアウトを長く取っても、待たされずに失敗する。
             .request("initialize", Value::Null, Duration::from_secs(30))

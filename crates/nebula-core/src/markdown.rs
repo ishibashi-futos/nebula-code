@@ -140,7 +140,11 @@ mod tests {
     fn マーカーの終端桁を返す() {
         assert_eq!(marker_end_column("- abc"), Some(2));
         assert_eq!(marker_end_column("* abc"), Some(2));
-        assert_eq!(marker_end_column("  - abc"), Some(4), "インデントを含めた桁を返す");
+        assert_eq!(
+            marker_end_column("  - abc"),
+            Some(4),
+            "インデントを含めた桁を返す"
+        );
         assert_eq!(marker_end_column("- [x] done"), Some(6));
         assert_eq!(marker_end_column("12. item"), Some(4));
         assert_eq!(marker_end_column("> quote"), Some(2));

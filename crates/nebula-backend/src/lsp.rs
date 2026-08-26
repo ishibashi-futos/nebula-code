@@ -313,9 +313,10 @@ impl LspService {
         else {
             return;
         };
-        server
-            .client
-            .notify("textDocument/didClose", json!({ "textDocument": { "uri": uri } }));
+        server.client.notify(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": uri } }),
+        );
     }
 
     /// 要求前に、サーバーが持つ文書の内容を `text` と一致させる。
@@ -473,7 +474,9 @@ impl LspService {
             )
             .await?;
         let response: Option<lsp::GotoDefinitionResponse> = parse(value)?;
-        let flat = response.map(convert::flatten_definition).unwrap_or_default();
+        let flat = response
+            .map(convert::flatten_definition)
+            .unwrap_or_default();
         Ok(self.to_location_links(flat).await)
     }
 
@@ -499,7 +502,9 @@ impl LspService {
             )
             .await?;
         let locations: Option<Vec<lsp::Location>> = parse(value)?;
-        let flat = locations.map(convert::flatten_locations).unwrap_or_default();
+        let flat = locations
+            .map(convert::flatten_locations)
+            .unwrap_or_default();
         Ok(self.to_location_links(flat).await)
     }
 
@@ -576,9 +581,7 @@ impl LspService {
         let edit: Option<lsp::WorkspaceEdit> = parse(value)?;
         match edit {
             Some(edit) => Ok(self.to_workspace_edit(edit).await),
-            None => Err(ProtocolError::external(
-                "この位置の名前は変更できません",
-            )),
+            None => Err(ProtocolError::external("この位置の名前は変更できません")),
         }
     }
 
@@ -674,9 +677,7 @@ impl LspService {
             // 編集内容を遅延生成するサーバーがある。解決要求で取り直す。
             None => {
                 let Some(server) = self.resolve_server(path).map(|(server, _)| server) else {
-                    return Err(ProtocolError::external(
-                        "言語サーバーが動いていません",
-                    ));
+                    return Err(ProtocolError::external("言語サーバーが動いていません"));
                 };
                 let value = server
                     .client
@@ -865,7 +866,9 @@ async fn handshake(
 /// 全文置換として受け付ける仕様。よって拒むのは「変更通知そのものが不要」な場合だけ。
 fn accepts_full_sync(sync: Option<&lsp::TextDocumentSyncCapability>) -> bool {
     match sync {
-        Some(lsp::TextDocumentSyncCapability::Kind(kind)) => *kind != lsp::TextDocumentSyncKind::NONE,
+        Some(lsp::TextDocumentSyncCapability::Kind(kind)) => {
+            *kind != lsp::TextDocumentSyncKind::NONE
+        }
         Some(lsp::TextDocumentSyncCapability::Options(options)) => options
             .change
             .is_some_and(|kind| kind != lsp::TextDocumentSyncKind::NONE),
@@ -1059,11 +1062,7 @@ impl Inner {
     }
 
     async fn stop(&self, key: &ServerKey, spec: ServerSpec) {
-        let server = self
-            .servers
-            .lock()
-            .expect("サーバー表のロック")
-            .remove(key);
+        let server = self.servers.lock().expect("サーバー表のロック").remove(key);
         // 文書の同期状態も捨てる。起動し直したサーバーは何も開いていないため。
         self.documents().retain(|_, document| document.key != *key);
         if let Some(server) = server {
@@ -1184,10 +1183,7 @@ mod tests {
     #[test]
     fn 言語_id_から起動コマンドを引ける() {
         assert_eq!(server_spec("rust").unwrap().program, "rust-analyzer");
-        assert_eq!(
-            server_spec("python").unwrap().program,
-            "pyright-langserver"
-        );
+        assert_eq!(server_spec("python").unwrap().program, "pyright-langserver");
         assert!(server_spec("markdown").is_none());
     }
 
@@ -1233,7 +1229,10 @@ mod tests {
                 ..Default::default()
             },
         ));
-        assert_eq!(progress_text(begin).as_deref(), Some("Indexing: 3/25 (12%)"));
+        assert_eq!(
+            progress_text(begin).as_deref(),
+            Some("Indexing: 3/25 (12%)")
+        );
 
         let end = lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::End(
             lsp::WorkDoneProgressEnd::default(),
@@ -1321,7 +1320,13 @@ mod tests {
         let (events, _rx) = broadcast::channel(16);
         let service = LspService::new(events, Arc::new(RwLock::new(DetectedTools::default())));
         let path = Path::new("/tmp/nebula-lsp-test/a.rs");
-        assert_eq!(service.hover(path, "fn main() {}", Position::new(0, 3)).await.unwrap(), None);
+        assert_eq!(
+            service
+                .hover(path, "fn main() {}", Position::new(0, 3))
+                .await
+                .unwrap(),
+            None
+        );
         assert!(
             service
                 .completion(path, "fn main() {}", Position::new(0, 3), None)

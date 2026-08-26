@@ -135,7 +135,10 @@ mod tests {
         let ws = WorkspaceId(1);
         let scheduled = debounce.touch(ws, Instant::now());
         assert!(debounce.due(ws, scheduled));
-        assert!(!debounce.due(ws, scheduled), "発火時に記録が消えるので二度目は起きない");
+        assert!(
+            !debounce.due(ws, scheduled),
+            "発火時に記録が消えるので二度目は起きない"
+        );
     }
 
     #[test]
@@ -146,7 +149,10 @@ mod tests {
         let t0 = Instant::now();
         let scheduled_a = debounce.touch(a, t0);
         debounce.touch(b, t0 + Duration::from_millis(10));
-        assert!(debounce.due(a, scheduled_a), "別ワークスペースの更新に巻き込まれない");
+        assert!(
+            debounce.due(a, scheduled_a),
+            "別ワークスペースの更新に巻き込まれない"
+        );
     }
 
     #[test]

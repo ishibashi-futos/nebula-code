@@ -56,8 +56,8 @@ impl FrameDecoder {
         if available.len() < HEADER_BYTES {
             return Ok(None);
         }
-        let len = u32::from_be_bytes([available[0], available[1], available[2], available[3]])
-            as usize;
+        let len =
+            u32::from_be_bytes([available[0], available[1], available[2], available[3]]) as usize;
         if len > MAX_FRAME_BYTES {
             return Err(ProtocolError::invalid(format!(
                 "フレーム長が不正です: {len} バイト"

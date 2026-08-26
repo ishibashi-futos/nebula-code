@@ -1,9 +1,9 @@
 //! 稼働中のバックエンドに外から接続し、開いているワークスペースを問い合わせる診断用テスト。
+use nebula_protocol::transport::{Stream, connect};
 use nebula_protocol::{
     ClientMessage, FrameDecoder, PROTOCOL_VERSION, Request, RequestId, Response, ServerMessage,
     encode_frame,
 };
-use nebula_protocol::transport::{Stream, connect};
 use std::io::{Read, Write};
 use std::time::Duration;
 
@@ -11,9 +11,11 @@ use std::time::Duration;
 #[ignore = "稼働中の GUI に対して手動で実行する診断"]
 fn 稼働中のバックエンドが開いているワークスペースを列挙する() {
     let endpoint = nebula_protocol::default_endpoint();
-    let mut stream = connect(&endpoint)
-        .unwrap_or_else(|e| panic!("{} に接続できない: {e}", endpoint.display()));
-    stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut stream =
+        connect(&endpoint).unwrap_or_else(|e| panic!("{} に接続できない: {e}", endpoint.display()));
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
     let mut decoder = FrameDecoder::new();
 
     let call = |stream: &mut Stream, decoder: &mut FrameDecoder, req: Request| -> Response {
@@ -36,7 +38,13 @@ fn 稼働中のバックエンドが開いているワークスペースを列�
         }
     };
 
-    match call(&mut stream, &mut decoder, Request::Handshake { protocol_version: PROTOCOL_VERSION }) {
+    match call(
+        &mut stream,
+        &mut decoder,
+        Request::Handshake {
+            protocol_version: PROTOCOL_VERSION,
+        },
+    ) {
         Response::Handshake(info) => println!("握手 OK: backend pid {}", info.pid),
         other => panic!("{other:?}"),
     }

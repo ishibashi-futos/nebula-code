@@ -5,11 +5,11 @@
 //! 応答が返ることだけを確かめる。
 
 use nebula_backend::{BackendState, ipc, tools};
+use nebula_protocol::transport::{Stream, connect};
 use nebula_protocol::{
     ClientMessage, Event, FrameDecoder, Request, RequestId, Response, SearchQuery, ServerMessage,
     TerminalSpec, encode_frame,
 };
-use nebula_protocol::transport::{Stream, connect};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -77,10 +77,9 @@ impl Client {
         loop {
             while let Ok(Some(message)) = self.decoder.next_message::<ServerMessage>() {
                 match message {
-                    ServerMessage::Response {
-                        id: got,
-                        result,
-                    } if got == id => return result.map_err(|e| e.to_string()),
+                    ServerMessage::Response { id: got, result } if got == id => {
+                        return result.map_err(|e| e.to_string());
+                    }
                     ServerMessage::Response { .. } => {}
                     ServerMessage::Event(event) => self.events.push(event),
                 }
@@ -185,9 +184,10 @@ fn ripgrep_検索の結果がイベントで届く() {
         other => panic!("検索を開始できない: {other:?}"),
     };
 
-    let finished = c.wait_event(Duration::from_secs(15), |event| {
-        matches!(event, Event::SearchFinished { search: s, .. } if *s == search)
-    });
+    let finished = c.wait_event(
+        Duration::from_secs(15),
+        |event| matches!(event, Event::SearchFinished { search: s, .. } if *s == search),
+    );
     assert!(finished, "検索完了イベントが届かない");
 
     let total: usize = c
@@ -378,18 +378,24 @@ fn ターミナルが起動して出力を返す() {
     };
 
     let seen = c.wait_event(Duration::from_secs(10), |event| match event {
-        Event::TerminalUpdated(update) if update.id == terminal => update
-            .dirty_lines
-            .iter()
-            .any(|(_, cells)| cells.iter().map(|c| c.ch).collect::<String>().contains("NEBULA_OK")),
+        Event::TerminalUpdated(update) if update.id == terminal => {
+            update.dirty_lines.iter().any(|(_, cells)| {
+                cells
+                    .iter()
+                    .map(|c| c.ch)
+                    .collect::<String>()
+                    .contains("NEBULA_OK")
+            })
+        }
         _ => false,
     });
     assert!(seen, "ターミナルの出力が届かない");
 
     // 終了イベントも届く
-    let exited = c.wait_event(Duration::from_secs(10), |event| {
-        matches!(event, Event::TerminalExited { terminal: t, .. } if *t == terminal)
-    });
+    let exited = c.wait_event(
+        Duration::from_secs(10),
+        |event| matches!(event, Event::TerminalExited { terminal: t, .. } if *t == terminal),
+    );
     assert!(exited, "ターミナル終了イベントが届かない");
 }
 

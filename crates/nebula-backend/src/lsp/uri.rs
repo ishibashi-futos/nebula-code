@@ -22,9 +22,9 @@ use std::str::FromStr;
 /// UNC パス (`\\server\share`) のいずれも受け付ける。実際にどの形かは `path_str_to_uri`
 /// が文字列の形だけで判定するので、ここでは呼び出すだけでよい。
 pub fn path_to_uri(path: &Path) -> Result<Uri, ProtocolError> {
-    let text = path
-        .to_str()
-        .ok_or_else(|| ProtocolError::invalid(format!("UTF-8 でないパスです: {}", path.display())))?;
+    let text = path.to_str().ok_or_else(|| {
+        ProtocolError::invalid(format!("UTF-8 でないパスです: {}", path.display()))
+    })?;
     if !path.is_absolute() {
         return Err(ProtocolError::invalid(format!(
             "LSP には絶対パスが要ります: {text}"

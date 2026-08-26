@@ -19,8 +19,7 @@ use crate::ui::{
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, CursorStyle, Div, ElementId, Entity, EventEmitter, HighlightStyle,
-    MouseButton, Stateful, StyledText, Subscription, Task, Window, div, px,
-    uniform_list,
+    MouseButton, Stateful, StyledText, Subscription, Task, Window, div, px, uniform_list,
 };
 use nebula_protocol::{
     Event, Position, ProtocolError, ProtocolErrorKind, Request, Response, SearchId, SearchMatch,

@@ -7,10 +7,10 @@
 //! **応答を見て自分で一覧を作り直すことはしない**。二重に更新経路を持つと、
 //! 外部で `git` を実行されたときだけ表示がずれる、という追いにくいバグになる。
 
-use crate::ui::format_keystroke;
 use crate::assets::Icon;
 use crate::ipc_client::BackendClient;
 use crate::theme::{Theme, theme};
+use crate::ui::format_keystroke;
 use crate::ui::{
     TextInput, TextInputEvent, empty_state, h_flex, icon, icon_button, list_row,
     nebula_accent_line, panel_header, primary_button, simple_tooltip, tooltip_text,

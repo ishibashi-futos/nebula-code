@@ -14,13 +14,13 @@
 #[cfg_attr(unix, path = "ipc_client/unix.rs")]
 mod platform;
 
+use nebula_protocol::transport::{Stream, connect as connect_endpoint};
 use nebula_protocol::{
     ClientMessage, Event, ExecutableIdentity, FrameDecoder, PROTOCOL_VERSION, ProtocolError,
     Request, RequestId, Response, ServerMessage, encode_frame,
 };
 use smol::channel::{Receiver, Sender, bounded, unbounded};
 use std::collections::HashMap;
-use nebula_protocol::transport::{Stream, connect as connect_endpoint};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -52,9 +52,8 @@ impl BackendClient {
         // 相乗りして古いコードで動き続ける」)。ハンドシェイクで報告される
         // 実行ファイルの同一性を、自分がこれから起動するはずのものと突き合わせる。
         let handshake = smol::block_on(client.handshake())?;
-        let expected = ExecutableIdentity::from_path(&backend_binary_path()).map_err(|e| {
-            ProtocolError::io(format!("自分の実行ファイルの情報を読めません: {e}"))
-        })?;
+        let expected = ExecutableIdentity::from_path(&backend_binary_path())
+            .map_err(|e| ProtocolError::io(format!("自分の実行ファイルの情報を読めません: {e}")))?;
         if is_same_executable(&expected, &handshake.executable) {
             return Ok(client);
         }

@@ -23,8 +23,8 @@ use crate::views::git::{GitSection, code_for, status_char, status_color};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClipboardItem, Context, ElementId, Entity, EventEmitter, FocusHandle,
-    Focusable, Hsla, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Subscription, Window,
-    anchored, deferred, div, px, uniform_list,
+    Focusable, Hsla, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Subscription,
+    Window, anchored, deferred, div, px, uniform_list,
 };
 use nebula_protocol::{
     DirEntry, Event, FileChange, FileChangeKind, GitFileStatus, GitRepoStatus, NotificationLevel,
@@ -121,7 +121,14 @@ fn push_level(
         });
         // 未取得のフォルダは展開済みでも子が無いので、そのまま何も足されない。
         if entry.is_dir && expanded.contains(&entry.path) {
-            push_level(&entry.path, depth + 1, children, expanded, show_hidden, rows);
+            push_level(
+                &entry.path,
+                depth + 1,
+                children,
+                expanded,
+                show_hidden,
+                rows,
+            );
         }
     }
 }
@@ -480,7 +487,8 @@ impl ExplorerView {
                 .position(|row| &row.path == path && !row.is_draft),
         };
         if let Some(index) = target {
-            self.scroll.scroll_to_item(index, gpui::ScrollStrategy::Center);
+            self.scroll
+                .scroll_to_item(index, gpui::ScrollStrategy::Center);
         }
     }
 
@@ -591,18 +599,16 @@ impl ExplorerView {
         };
         cx.spawn(async move |this, cx| {
             let result = client.request(Request::GitStatus { workspace }).await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(Response::GitStatus(status)) => {
-                        this.apply_git_status(status);
-                        cx.notify();
-                    }
-                    Ok(_) => {}
-                    Err(e) => cx.emit(ExplorerEvent::Notify(
-                        NotificationLevel::Warning,
-                        format!("git の状態を取得できません: {e}"),
-                    )),
+            this.update(cx, |this, cx| match result {
+                Ok(Response::GitStatus(status)) => {
+                    this.apply_git_status(status);
+                    cx.notify();
                 }
+                Ok(_) => {}
+                Err(e) => cx.emit(ExplorerEvent::Notify(
+                    NotificationLevel::Warning,
+                    format!("git の状態を取得できません: {e}"),
+                )),
             })
             .ok();
         })
@@ -1507,10 +1513,7 @@ mod tests {
     #[test]
     fn 同じフォルダの複数変更は一つのエントリにまとまる() {
         let root = PathBuf::from("/w");
-        let paths = vec![
-            PathBuf::from("/w/src/a.rs"),
-            PathBuf::from("/w/src/b.rs"),
-        ];
+        let paths = vec![PathBuf::from("/w/src/a.rs"), PathBuf::from("/w/src/b.rs")];
         let dirs = changed_ancestor_dirs(&root, &paths);
         assert_eq!(dirs, [PathBuf::from("/w/src")].into_iter().collect());
     }
