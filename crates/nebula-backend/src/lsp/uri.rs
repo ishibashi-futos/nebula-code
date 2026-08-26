@@ -42,6 +42,9 @@ pub fn path_to_uri(path: &Path) -> Result<Uri, ProtocolError> {
 /// サーバー名を表すので、`\\server\share\...` として復元する。この分岐だけが実行環境の OS に
 /// 依存する部分で、それ以外の文字列変換は `uri_str_to_unix_path` / `uri_str_to_windows_path` という
 /// 純粋関数に閉じてある。
+///
+/// Windows ではさらに、ドライブレターの無い URI（`file:///tmp/a.rs` のような Unix 形式）も
+/// `None` にする。理由は `uri_str_to_windows_path` のコメントを参照。
 pub fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
     let rest = uri.as_str().strip_prefix("file://")?;
     // クエリやフラグメントは file URI では意味を持たないので捨てる。
@@ -95,9 +98,25 @@ fn uri_str_to_unix_path(rest: &str) -> Option<String> {
 ///
 /// 先頭が `/` ならドライブレターパス（`/C:/...` → `C:\...`）、それ以外（権限部つき）は
 /// UNC パス（`server/share/...` → `\\server\share\...`）として復元する。
+///
+/// ドライブレターが無い場合（`file:///tmp/a.rs` のような Unix 形式の URI）は `None` にする。
+/// 先頭の `/` を単純に落として `\tmp\a.rs` を返す案もあるが、それは `Path::is_absolute` が
+/// 偽になる非絶対パスであり（`path_to_uri` 自身が絶対パス以外を拒否しているのと矛盾する）、
+/// LSP サーバーに渡すとカレントドライブ基準で解決されて意図しないファイルを指しかねない。
+/// 変換できないことを `None` で伝え、呼び出し側にエラーとして扱わせる方が安全。
+/// ドライブレターの判定はパーセントデコードした後の文字列に対して行う。ドライブレターの
+/// コロンをエンコードして送ってくるクライアントがいても取りこぼさないため。
+///
+/// ドライブレターの直後が `/` でない場合（`file:///C:foo` → `C:foo`）も同じ理由で `None` に
+/// する。`C:foo` はドライブ相対パスであり、これも `Path::is_absolute` が偽になる非絶対パス。
 fn uri_str_to_windows_path(rest: &str) -> Option<String> {
     if let Some(body) = rest.strip_prefix('/') {
-        Some(decode(body)?.replace('/', "\\"))
+        let decoded = decode(body)?;
+        windows_drive_prefix(&decoded)?;
+        if decoded.as_bytes().get(2) != Some(&b'/') {
+            return None;
+        }
+        Some(decoded.replace('/', "\\"))
     } else if !rest.is_empty() {
         Some(format!(r"\\{}", decode(rest)?.replace('/', "\\")))
     } else {
@@ -143,9 +162,25 @@ fn decode(text: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn roundtrip(path: &str) {
-        let uri = path_to_uri(Path::new(path)).unwrap();
-        assert_eq!(uri_to_path(&uri).unwrap(), PathBuf::from(path));
+    /// Unix 形式の絶対パス文字列を、実行環境の OS で実際に絶対パスとして通る形に直す。
+    ///
+    /// `path_to_uri` は `Path::is_absolute()` で絶対パスかどうかを判定するため、
+    /// Windows ではドライブレターの無い `/Users/foo/...` は絶対パス扱いされない。
+    /// end-to-end のテストは `path_to_uri` / `uri_to_path` の実物を通したいので、
+    /// 入力の方を実行環境の OS に合わせて出し分ける。
+    fn native_absolute(unix_style: &str) -> String {
+        if cfg!(windows) {
+            let rest = unix_style.trim_start_matches('/').replace('/', "\\");
+            format!(r"C:\{rest}")
+        } else {
+            unix_style.to_string()
+        }
+    }
+
+    fn roundtrip(unix_style_path: &str) {
+        let path = native_absolute(unix_style_path);
+        let uri = path_to_uri(Path::new(&path)).unwrap();
+        assert_eq!(uri_to_path(&uri).unwrap(), PathBuf::from(&path));
     }
 
     #[test]
@@ -165,8 +200,9 @@ mod tests {
 
     #[test]
     fn 空白はパーセントエンコードされる() {
-        let uri = path_to_uri(Path::new("/a b/c.rs")).unwrap();
-        assert_eq!(uri.as_str(), "file:///a%20b/c.rs");
+        // エンコードの形自体は OS に依存しないので、`Path` 経由の絶対パス判定を
+        // 挟まない純粋関数 `path_str_to_uri` を直接検証する。
+        assert_eq!(path_str_to_uri("/a b/c.rs"), "file:///a%20b/c.rs");
     }
 
     #[test]
@@ -183,7 +219,13 @@ mod tests {
     #[test]
     fn 権限部つきの_file_uri_はパスにならない() {
         let uri = Uri::from_str("file://host/a.rs").unwrap();
-        assert!(uri_to_path(&uri).is_none());
+        if cfg!(windows) {
+            // Windows では権限部が UNC のサーバー名として解釈できるので None にはならない。
+            assert_eq!(uri_to_path(&uri), Some(PathBuf::from(r"\\host\a.rs")));
+        } else {
+            // Unix にはネットワークパスという概念が無いため解釈できない。
+            assert!(uri_to_path(&uri).is_none());
+        }
     }
 
     // ここから下は Windows 形式パスの変換テスト。実行環境の OS に関わらず検証できるよう、
@@ -214,6 +256,23 @@ mod tests {
         );
         let rest = uri.strip_prefix("file://").unwrap();
         assert_eq!(uri_str_to_windows_path(rest).unwrap(), original);
+    }
+
+    #[test]
+    fn ドライブレターの無い_uri_は_windows_ではパスにならない() {
+        // file:///tmp/a.rs のような Unix 形式の URI をそのまま Windows パスとして
+        // 復元すると `\tmp\a.rs` という、絶対パスにならない文字列になってしまう。
+        // それを避けて None を返すことを、実行環境の OS に関わらず検証する。
+        assert!(uri_str_to_windows_path("/tmp/a.rs").is_none());
+    }
+
+    #[test]
+    fn ドライブ相対パスの_uri_は_windows_ではパスにならない() {
+        // file:///C:foo のようにドライブレターの直後が `/` でない URI は、
+        // 復元すると `C:foo` というドライブ相対パス（非絶対パス）になってしまう。
+        // これも同じ理由で None にする。
+        assert!(uri_str_to_windows_path("/C:foo").is_none());
+        assert!(uri_str_to_windows_path("/C:").is_none());
     }
 
     #[test]

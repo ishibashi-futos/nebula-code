@@ -421,6 +421,30 @@ mod tests {
         serde_json::from_value(value).expect("応答の解析")
     }
 
+    /// `uri_to_path` を通すテスト用に、一時ディレクトリ配下のファイルを指す
+    /// URI 文字列とそれが復元されるべきパスの組を作る。
+    ///
+    /// `lsp::uri::uri_to_path` は Windows ではドライブレターの無い URI
+    /// （`file:///tmp/a.rs` のような Unix 形式）を `None` にする仕様にしたため、
+    /// これを経由するテストは Unix のパスをそのまま使えない。プラットフォームごとに
+    /// 正しい URI とパスを 1 箇所にまとめ、各テストの分岐を無くす。
+    ///
+    /// `name_in_uri` は URI に埋め込む形（パーセントエンコード済みならそのまま）、
+    /// `name` は復元後のパスに現れる形（デコード済み）を渡す。
+    fn tmp_uri_and_path(name_in_uri: &str, name: &str) -> (String, PathBuf) {
+        if cfg!(windows) {
+            (
+                format!("file:///C:/tmp/{name_in_uri}"),
+                PathBuf::from(format!(r"C:\tmp\{name}")),
+            )
+        } else {
+            (
+                format!("file:///tmp/{name_in_uri}"),
+                PathBuf::from(format!("/tmp/{name}")),
+            )
+        }
+    }
+
     // -- ホバー --
 
     #[test]
@@ -536,38 +560,42 @@ mod tests {
 
     #[test]
     fn 定義応答の_location_形式を扱える() {
+        let (uri, path) = tmp_uri_and_path("a.rs", "a.rs");
         let response: lsp::GotoDefinitionResponse = parse(json!({
-            "uri": "file:///tmp/a.rs",
+            "uri": uri,
             "range": { "start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 8} }
         }));
         let flat = flatten_definition(response);
         assert_eq!(flat.len(), 1);
-        assert_eq!(flat[0].0, PathBuf::from("/tmp/a.rs"));
+        assert_eq!(flat[0].0, path);
         assert_eq!(flat[0].1.start.line, 3);
     }
 
     #[test]
     fn 定義応答の_locationlink_形式は選択範囲を採る() {
+        let (uri, path) = tmp_uri_and_path("%E8%A8%AD%E8%A8%88.rs", "設計.rs");
         let response: lsp::GotoDefinitionResponse = parse(json!([{
-            "targetUri": "file:///tmp/%E8%A8%AD%E8%A8%88.rs",
+            "targetUri": uri,
             "targetRange": { "start": {"line": 1, "character": 0}, "end": {"line": 9, "character": 1} },
             "targetSelectionRange": { "start": {"line": 1, "character": 7}, "end": {"line": 1, "character": 11} }
         }]));
         let flat = flatten_definition(response);
-        assert_eq!(flat[0].0, PathBuf::from("/tmp/設計.rs"));
+        assert_eq!(flat[0].0, path);
         assert_eq!(flat[0].1.start.character, 7);
         assert_eq!(flat[0].1.end.character, 11);
     }
 
     #[test]
     fn 定義応答の配列形式を扱える() {
+        let (uri_a, _path_a) = tmp_uri_and_path("a.rs", "a.rs");
+        let (uri_b, path_b) = tmp_uri_and_path("b.rs", "b.rs");
         let response: lsp::GotoDefinitionResponse = parse(json!([
-            { "uri": "file:///tmp/a.rs", "range": { "start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1} } },
-            { "uri": "file:///tmp/b.rs", "range": { "start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 1} } }
+            { "uri": uri_a, "range": { "start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1} } },
+            { "uri": uri_b, "range": { "start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 1} } }
         ]));
         let flat = flatten_definition(response);
         assert_eq!(flat.len(), 2);
-        assert_eq!(flat[1].0, PathBuf::from("/tmp/b.rs"));
+        assert_eq!(flat[1].0, path_b);
     }
 
     // -- シンボル --
@@ -614,28 +642,32 @@ mod tests {
 
     #[test]
     fn ワークスペース編集の_changes_形式をパスごとに均す() {
+        let (uri_a, path_a) = tmp_uri_and_path("a.rs", "a.rs");
+        let (uri_b, path_b) = tmp_uri_and_path("b.rs", "b.rs");
         let edit: lsp::WorkspaceEdit = parse(json!({
             "changes": {
-                "file:///tmp/b.rs": [{ "range": { "start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 3} }, "newText": "new" }],
-                "file:///tmp/a.rs": [{ "range": { "start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 3} }, "newText": "new" }]
+                uri_b: [{ "range": { "start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 3} }, "newText": "new" }],
+                uri_a: [{ "range": { "start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 3} }, "newText": "new" }]
             }
         }));
         let flat = flatten_workspace_edit(edit);
         // パス順に安定して並ぶ。
-        assert_eq!(flat[0].0, PathBuf::from("/tmp/a.rs"));
-        assert_eq!(flat[1].0, PathBuf::from("/tmp/b.rs"));
+        assert_eq!(flat[0].0, path_a);
+        assert_eq!(flat[1].0, path_b);
     }
 
     #[test]
     fn ワークスペース編集の_documentchanges_形式を扱える() {
+        let (uri, path) = tmp_uri_and_path("a.rs", "a.rs");
         let edit: lsp::WorkspaceEdit = parse(json!({
             "documentChanges": [{
-                "textDocument": { "uri": "file:///tmp/a.rs", "version": 3 },
+                "textDocument": { "uri": uri, "version": 3 },
                 "edits": [{ "range": { "start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7} }, "newText": "renamed" }]
             }]
         }));
         let flat = flatten_workspace_edit(edit);
         assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].0, path);
         let edits = text_edits(flat[0].1.clone(), TEXT);
         assert_eq!(edits[0].new_text, "renamed");
         assert_eq!(
@@ -646,18 +678,20 @@ mod tests {
 
     #[test]
     fn ファイル操作を含む_documentchanges_は編集だけ拾う() {
+        let (uri_new, _path_new) = tmp_uri_and_path("new.rs", "new.rs");
+        let (uri_a, path_a) = tmp_uri_and_path("a.rs", "a.rs");
         let edit: lsp::WorkspaceEdit = parse(json!({
             "documentChanges": [
-                { "kind": "create", "uri": "file:///tmp/new.rs" },
+                { "kind": "create", "uri": uri_new },
                 {
-                    "textDocument": { "uri": "file:///tmp/a.rs", "version": null },
+                    "textDocument": { "uri": uri_a, "version": null },
                     "edits": [{ "range": { "start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1} }, "newText": "x" }]
                 }
             ]
         }));
         let flat = flatten_workspace_edit(edit);
         assert_eq!(flat.len(), 1);
-        assert_eq!(flat[0].0, PathBuf::from("/tmp/a.rs"));
+        assert_eq!(flat[0].0, path_a);
     }
 
     // -- シグネチャヘルプ --
