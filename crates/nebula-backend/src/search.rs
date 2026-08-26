@@ -566,7 +566,19 @@ fn walk(root: &Path) -> Vec<FileEntry> {
         let Ok(relative) = item.path().strip_prefix(root) else {
             continue;
         };
-        let relative = relative.to_string_lossy().into_owned();
+        // `relative` は `FileCandidate::relative` として IPC 経由で GUI へ渡る表示専用の
+        // 文字列で、ファイルシステム操作には使わない (実際のパスは併せて持つ `path` を使う)。
+        // GUI 側の `split_relative` (crates/nebula/src/views/palette.rs) はディレクトリ部と
+        // ファイル名を `/` 決め打ちで分割しているため、ここでネイティブ区切り
+        // (Windows なら `\`) のまま渡すと分割できず表示が壊れる。よって OS に関わらず
+        // `/` へ正規化する。`to_string_lossy()` で丸ごと文字列化してから `\` を置換すると
+        // Unix でファイル名に `\` を含むケースまで壊してしまうため、コンポーネント単位で
+        // 組み立てる。
+        let relative = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
         let name_start = fuzzy::name_start_of(&relative);
         entries.push(FileEntry {
             path: item.path().to_path_buf(),
@@ -1092,6 +1104,8 @@ mod tests {
 
         // gitignore された target/ は出てこない。
         assert_eq!(found.len(), 1);
+        // `relative` は表示専用の正規化済み文字列なので、Windows でも `/` 区切りを期待する
+        // (ネイティブ区切りではない。`walk` 内のコメント参照)。
         assert_eq!(found[0].relative, "src/search.rs");
         assert!(!found[0].match_positions.is_empty());
 

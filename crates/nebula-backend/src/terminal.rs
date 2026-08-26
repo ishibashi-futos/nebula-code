@@ -3,12 +3,14 @@
 //! PTY を開いて出力を [`grid`] のエミュレータに食わせ、変化した行だけを
 //! `Event::TerminalUpdated` で GUI へ流す。
 //!
-//! セッションごとに OS スレッドを 2 本使う。
+//! セッションごとに OS スレッドを 2 本 (Windows はさらに 1 本) 使う。
 //!
 //! - 読み取りスレッド: PTY からの `read` でブロックし、届いたバイト列を解釈する。
 //!   `read` にはタイムアウトが無いので、tokio のタスクに載せると実行枠を占有してしまう。
 //! - 送出スレッド: 16ms 周期で差分を取り出して送る。読み取りのたびに送ると、
 //!   1 バイトずつ届く対話入力で IPC が溢れてエディタが止まる。
+//! - 終了監視スレッド (Windows のみ): 子プロセスの終了を検知し、ConPTY を明示的に
+//!   閉じて読み取りスレッドの `read` を解放する。詳細は [`spawn_exit_watcher`] を参照。
 //!
 //! シェルを明示指定されていないときは、一般的な端末エミュレータと同じくログインシェル
 //! として起動する。そうしないとログインシェル用の設定 (zsh なら `.zprofile` / `.zlogin`)
@@ -34,7 +36,9 @@ struct Session {
     emulator: Arc<Mutex<TerminalEmulator>>,
     /// PTY への書き込み口。`take_writer` は 1 度しか呼べないので生成時に確保しておく。
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    master: Box<dyn MasterPty + Send>,
+    /// `None` は子プロセスの終了を受けて明示的に閉じたことを表す
+    /// ([`spawn_exit_watcher`] 参照)。以後の `resize` はエラーになる。
+    master: Option<Box<dyn MasterPty + Send>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
@@ -90,11 +94,25 @@ impl TerminalService {
                     emulator: Arc::clone(&emulator),
                     writer: Arc::clone(&writer),
                     killer: child.clone_killer(),
-                    master: pair.master,
+                    master: Some(pair.master),
                 },
             );
 
+        // 読み取りスレッドと終了監視スレッド (Windows のみ) の両方から `wait` を呼べるよう
+        // 共有する。`Child::wait`/`try_wait` は 2 回目以降も同じ結果を返すよう作られている
+        // ため (Unix は `std::process::Child` 内部のキャッシュ、Windows は
+        // `GetExitCodeProcess` の再照会)、同じ子を指す限り呼び出し元が複数あっても壊れない。
+        let child = Arc::new(Mutex::new(child));
         let finished = Arc::new(AtomicBool::new(false));
+        // Unix は子プロセスが終了すれば slave 側の fd が消えて読み取りが自然に EOF になるので
+        // 不要。むしろ Unix でこの監視スレッドを常時動かすと、読み取りスレッドの EOF より先に
+        // 子を reap してしまい、その pid が再利用された後に `close()` の SIGHUP が無関係の
+        // プロセスへ飛ぶ危険がある (portable-pty の Unix 版 killer は pid 決め打ちで、
+        // ハンドルではなくプロセスそのものを握っているわけではない)。Windows の
+        // `ProcessSignaller` はハンドルを握るのでこの危険が無い。
+        if cfg!(windows) {
+            spawn_exit_watcher(id, Arc::clone(&child), Arc::clone(&self.sessions));
+        }
         spawn_reader(
             id,
             reader,
@@ -136,9 +154,16 @@ impl TerminalService {
         let cols = cols.max(1);
         let (resized, emulator) = self.with_session(terminal, |s| {
             (
-                s.master.resize(pty_size(rows, cols)),
+                s.master
+                    .as_ref()
+                    .map(|master| master.resize(pty_size(rows, cols))),
                 Arc::clone(&s.emulator),
             )
+        })?;
+        // `master` が `None` なのは子プロセスがすでに終了し ([`spawn_exit_watcher`] 参照)、
+        // PTY を明示的に閉じた後。閉じたセッションはリサイズしようがない。
+        let resized = resized.ok_or_else(|| {
+            ProtocolError::not_found(format!("ターミナル {terminal} はすでに終了しています"))
         })?;
         resized.map_err(|e| ProtocolError::io(format!("PTY をリサイズできません: {e}")))?;
 
@@ -244,7 +269,7 @@ fn build_command(spec: &TerminalSpec) -> CommandBuilder {
 fn spawn_reader(
     id: TerminalId,
     mut reader: Box<dyn Read + Send>,
-    mut child: Box<dyn Child + Send + Sync>,
+    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     emulator: Arc<Mutex<TerminalEmulator>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     sessions: Sessions,
@@ -278,12 +303,57 @@ fn spawn_reader(
         finished.store(true, Ordering::Release);
         // 末尾の出力を届けてから終了を伝える。逆順だと GUI が最後の行を取りこぼす。
         flush(&events, id, &emulator);
-        let exit_code = child.wait().ok().map(|status| status.exit_code() as i32);
+        // ここに来た時点で子はほぼ確実に終了している (Windows は spawn_exit_watcher が
+        // 先に検知済み、Unix は EOF 自体が子の終了に伴って届く)。`wait` は 2 回呼んでも
+        // 同じ結果が返るので、監視スレッドと競合しても壊れない。
+        let exit_code = child
+            .lock()
+            .expect("子プロセスのロック")
+            .wait()
+            .ok()
+            .map(|status| status.exit_code() as i32);
         sessions.lock().expect("ターミナル一覧のロック").remove(&id);
         let _ = events.send(Event::TerminalExited {
             terminal: id,
             exit_code,
         });
+    });
+}
+
+/// 子プロセスの終了を検知し、PTY を明示的に閉じて読み取りスレッドの `read` を解放する。
+///
+/// Windows の ConPTY は、子プロセスが終了しても `ClosePseudoConsole` で擬似コンソールを
+/// 明示的に閉じない限り生き続け、master 側の読み取りは EOF にならない。Unix の
+/// 「slave 側の fd を落とせば EOF になる」という前提が成り立たないため、
+/// [`spawn_reader`] の `read` が永久に戻ってこず `TerminalExited` が届かない。
+///
+/// `child.wait()` はターミナルの OS プロセスハンドル/pid を待つだけで PTY の read/write を
+/// 経由しないため、master 側の読み取りが詰まっていても影響を受けずに子の終了を検知できる。
+/// 検知したら [`Session::master`] を `None` にして最後の参照を落とし、
+/// `ConPtyMasterPty` の `Drop` (→ `ClosePseudoConsole`) を発火させる。
+///
+/// 呼び出し元 ([`TerminalService::create`]) は Windows でのみこのスレッドを起動する。
+/// Unix では子の終了は読み取りスレッドが EOF で自然に検知できるので不要な上、この監視を
+/// 常時動かすと読み取りスレッドの EOF より先に子を reap してしまい、解放された pid が
+/// 再利用された後に `close()` の SIGHUP が無関係のプロセスへ飛ぶ危険がある
+/// (portable-pty の Unix 版 killer はハンドルではなく pid を握るだけなので)。
+fn spawn_exit_watcher(
+    id: TerminalId,
+    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    sessions: Sessions,
+) {
+    std::thread::spawn(move || {
+        let _ = child.lock().expect("子プロセスのロック").wait();
+
+        // `ClosePseudoConsole` は conhost の終了を待つため塞き止められることがある。
+        // `sessions` のロックを持ったままだと他のターミナルの input/resize/close まで
+        // 巻き添えで止まるので、Option を取り出してロックを離してから drop する。
+        let master = sessions
+            .lock()
+            .expect("ターミナル一覧のロック")
+            .get_mut(&id)
+            .and_then(|session| session.master.take());
+        drop(master);
     });
 }
 
