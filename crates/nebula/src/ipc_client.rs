@@ -1,9 +1,18 @@
 //! GUI プロセス側の IPC クライアント。
 //!
-//! ソケットの読み書きは専用の OS スレッドで行う。gpui の executor 上で
+//! 読み書きは専用の OS スレッドで行う。gpui の executor 上で
 //! ブロッキング I/O を回すと描画タスクの実行枠を奪うため、描画とは物理的に分ける。
 //! スレッドと GUI の間は smol のチャネルでつなぐので、ビュー側からは
 //! `client.request(...).await` と書くだけで済む。
+//!
+//! 接続そのもの (Unix ドメインソケット / 名前付きパイプ) は
+//! `nebula_protocol::transport` が両プラットフォームぶん面倒を見る。
+//! ここの `platform` サブモジュールに残るのは、GUI にしか要らない
+//! 「古いバックエンドをどう終わらせ、どう終了を見届けるか」だけ。
+
+#[cfg_attr(windows, path = "ipc_client/windows.rs")]
+#[cfg_attr(unix, path = "ipc_client/unix.rs")]
+mod platform;
 
 use nebula_protocol::{
     ClientMessage, Event, ExecutableIdentity, FrameDecoder, PROTOCOL_VERSION, ProtocolError,
@@ -11,8 +20,8 @@ use nebula_protocol::{
 };
 use smol::channel::{Receiver, Sender, bounded, unbounded};
 use std::collections::HashMap;
+use nebula_protocol::transport::{Stream, connect as connect_endpoint};
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -33,8 +42,8 @@ impl BackendClient {
     ///
     /// ブロッキングする。呼び出し側はバックグラウンドスレッドから呼ぶこと。
     pub fn connect_blocking() -> Result<Self, ProtocolError> {
-        let socket_path = nebula_protocol::default_socket_path();
-        let stream = connect_or_spawn(&socket_path)?;
+        let endpoint = nebula_protocol::default_endpoint();
+        let stream = connect_or_spawn(&endpoint)?;
         let client = Self::from_stream(stream)?;
 
         // 接続できただけでは「正しいバックエンドか」は分からない。相乗り先が
@@ -54,16 +63,16 @@ impl BackendClient {
             "nebula: 実行ファイルが一致しない古いバックエンド (pid {}) を終了させて起動し直します",
             handshake.pid
         );
-        replace_backend(&client, handshake.pid, &socket_path);
+        replace_backend(&client, handshake.pid, &endpoint);
 
-        let stream = connect_or_spawn(&socket_path)?;
+        let stream = connect_or_spawn(&endpoint)?;
         Self::from_stream(stream)
     }
 
-    fn from_stream(stream: UnixStream) -> Result<Self, ProtocolError> {
+    fn from_stream(stream: Stream) -> Result<Self, ProtocolError> {
         let read_half = stream
             .try_clone()
-            .map_err(|e| ProtocolError::io(format!("ソケットを複製できません: {e}")))?;
+            .map_err(|e| ProtocolError::io(format!("接続を複製できません: {e}")))?;
         let (outgoing_tx, outgoing_rx) = unbounded::<ClientMessage>();
         let (events_tx, events_rx) = unbounded::<Event>();
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
@@ -134,7 +143,7 @@ impl BackendClient {
     }
 }
 
-fn spawn_writer(mut stream: UnixStream, outgoing: Receiver<ClientMessage>) {
+fn spawn_writer(mut stream: Stream, outgoing: Receiver<ClientMessage>) {
     std::thread::Builder::new()
         .name("nebula-ipc-writer".into())
         .spawn(move || {
@@ -151,7 +160,7 @@ fn spawn_writer(mut stream: UnixStream, outgoing: Receiver<ClientMessage>) {
 }
 
 fn spawn_reader(
-    mut stream: UnixStream,
+    mut stream: Stream,
     pending: PendingMap,
     events: Sender<Event>,
     disconnected: Arc<Mutex<bool>>,
@@ -199,14 +208,14 @@ fn spawn_reader(
 }
 
 /// 既存のバックエンドに繋ぐ。無ければ起動して待つ。
-fn connect_or_spawn(socket_path: &Path) -> Result<UnixStream, ProtocolError> {
-    if let Ok(stream) = UnixStream::connect(socket_path) {
+fn connect_or_spawn(endpoint: &Path) -> Result<Stream, ProtocolError> {
+    if let Ok(stream) = connect_endpoint(endpoint) {
         return Ok(stream);
     }
     let binary = backend_binary_path();
     let child = std::process::Command::new(&binary)
-        .arg("--socket")
-        .arg(socket_path)
+        .arg("--endpoint")
+        .arg(endpoint)
         .stdin(std::process::Stdio::null())
         .spawn()
         .map_err(|e| {
@@ -217,27 +226,29 @@ fn connect_or_spawn(socket_path: &Path) -> Result<UnixStream, ProtocolError> {
         })?;
     spawn_reaper(child);
 
-    // 起動待ち。合計で約 5 秒。
+    // 起動待ち。合計で約 5 秒。ここでは失敗の種別を見ない。「まだ待ち受けが
+    // 無い」も「一瞬だけ埋まっていた」も、待って繰り返せば解ける点で同じ。
     let mut delay = std::time::Duration::from_millis(2);
     for _ in 0..24 {
         std::thread::sleep(delay);
-        if let Ok(stream) = UnixStream::connect(socket_path) {
+        if let Ok(stream) = connect_endpoint(endpoint) {
             return Ok(stream);
         }
         delay = (delay * 2).min(std::time::Duration::from_millis(400));
     }
     Err(ProtocolError::io(format!(
         "バックエンドに接続できませんでした: {}",
-        socket_path.display()
+        endpoint.display()
     )))
 }
 
 /// バックエンド実行ファイルの位置。GUI と同じディレクトリに置く前提。
 fn backend_binary_path() -> PathBuf {
+    let name = format!("nebula-backend{}", std::env::consts::EXE_SUFFIX);
     std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join("nebula-backend")))
-        .unwrap_or_else(|| PathBuf::from("nebula-backend"))
+        .and_then(|p| p.parent().map(|d| d.join(&name)))
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 /// 起動した子プロセス (バックエンド) を回収する。
@@ -268,48 +279,28 @@ fn is_same_executable(expected: &ExecutableIdentity, actual: &ExecutableIdentity
 /// 実行ファイルが一致しない古いバックエンドを終わらせる。
 ///
 /// `Request::Shutdown` の正常経路 (バックエンド側で各サービスの後始末をしてから
-/// ソケットファイルを消す) を優先する。それでも一定時間でソケットファイルが
-/// 消えない場合に限り、最終手段として SIGTERM を送る。
-fn replace_backend(client: &BackendClient, pid: u32, socket_path: &Path) {
+/// 待ち受けを畳む) を優先する。それでも一定時間で終わらない場合に限り、
+/// 最終手段として強制終了する。
+fn replace_backend(client: &BackendClient, pid: u32, endpoint: &Path) {
     // `request()` で応答を待つと、応答を返せないくらい壊れている相手には
     // この呼び出し自体が無期限にハングしてしまい、そのために用意した
-    // 「一定時間で見切って SIGTERM」という最終手段へ辿り着けなくなる。
-    // 送るだけ送って応答は待たず、後続のポーリングとタイムアウトに判断を委ねる。
+    // 「一定時間で見切って強制終了」という最終手段へ辿り着けなくなる。
+    // 送るだけ送って応答は待たず、後続の待ち合わせとタイムアウトに判断を委ねる。
     let id = RequestId::next();
     let _ = client.outgoing.try_send(ClientMessage::Request {
         id,
         request: Request::Shutdown,
     });
 
-    if wait_for_socket_gone(socket_path, std::time::Duration::from_secs(2)) {
+    if platform::wait_for_backend_gone(endpoint, pid, std::time::Duration::from_secs(2)) {
         return;
     }
 
-    eprintln!("nebula: Shutdown に応答しないため SIGTERM で終了させます (pid {pid})");
-    // SAFETY: pid はハンドシェイクで得た実在のプロセス ID。SIGTERM は対象プロセスに
-    // 既定の終了処理を促すだけで、こちらのメモリには一切触れない。
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
-    }
-    // ソケットファイルが残っていても構わない。SIGTERM は既定の動作 (即終了) を
-    // 起こすだけでバックエンド側の後始末は走らないため、ファイルは残ることが多い。
-    // その残骸は次の `connect_or_spawn` が起動する新しいバックエンドの
-    // `acquire_listener` 側で「応答しない残骸」として片付けられる。
-}
-
-/// ソケットファイルが消えるまで短い間隔でポーリングする。
-///
-/// バックエンドは `Request::Shutdown` を受けて後始末を終えると、待ち受けていた
-/// ソケットファイルを削除する。それを「終了し切った」の合図として使う。
-fn wait_for_socket_gone(socket_path: &Path, timeout: std::time::Duration) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    while std::time::Instant::now() < deadline {
-        if !socket_path.exists() {
-            return true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    !socket_path.exists()
+    eprintln!("nebula: Shutdown に応答しないため強制終了させます (pid {pid})");
+    platform::terminate(pid);
+    // 強制終了ではバックエンド側の後始末が走らないため、Unix ではソケット
+    // ファイルが残ることが多い。その残骸は次の `connect_or_spawn` が起動する
+    // 新しいバックエンドの `acquire` 側で「応答しない残骸」として片付けられる。
 }
 
 #[cfg(test)]

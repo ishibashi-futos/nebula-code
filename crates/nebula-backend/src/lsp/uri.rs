@@ -3,13 +3,24 @@
 //! `lsp_types::Uri` は文字列を検証するだけでパスとの変換を持たないため自前で書く。
 //! 日本語ファイル名や空白を含むパスはパーセントエンコードしないと URI として不正になり、
 //! サーバー側で解釈できない。
+//!
+//! Unix と Windows の両方に対応する。Windows にはドライブレター絶対パス (`C:\...`) と
+//! UNC パス (`\\server\share\...`) という Unix にない形があるため、パスの区切りが `\` か、
+//! 先頭が `X:` かといった文字列の「形」で判定する。この判定とエンコード/デコードの本体は
+//! `&str` を受け取る純粋関数にしてあり、`cfg(windows)` に依存しない。そのため macOS/Linux 上の
+//! `cargo test` でも Windows 形式パスの変換を検証できる。実際にどちらの OS 向けに解釈するかを
+//! 選ぶ箇所（`uri_to_path` の中）だけが `cfg(windows)` の境目になる。
 
 use lsp_types::Uri;
 use nebula_protocol::ProtocolError;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-/// 絶対パスを `file:///...` 形式の URI にする。
+/// 絶対パスを `file:` URI にする。
+///
+/// Unix の絶対パス (`/home/foo`)、Windows のドライブレターパス (`C:\Users\foo`)、
+/// UNC パス (`\\server\share`) のいずれも受け付ける。実際にどの形かは `path_str_to_uri`
+/// が文字列の形だけで判定するので、ここでは呼び出すだけでよい。
 pub fn path_to_uri(path: &Path) -> Result<Uri, ProtocolError> {
     let text = path
         .to_str()
@@ -19,22 +30,79 @@ pub fn path_to_uri(path: &Path) -> Result<Uri, ProtocolError> {
             "LSP には絶対パスが要ります: {text}"
         )));
     }
-    let encoded = format!("file://{}", encode(text));
+    let encoded = path_str_to_uri(text);
     Uri::from_str(&encoded)
         .map_err(|e| ProtocolError::internal(format!("URI を組み立てられません ({encoded}): {e}")))
 }
 
 /// `file:` URI をパスに戻す。`file:` 以外や壊れた URI は `None`。
+///
+/// 権限部（ホスト名）の扱いは OS で意味が異なる。Unix にはネットワークパスという概念がないため
+/// 権限部を持つ URI はローカルパスとして解釈できず `None` にする。Windows では権限部は UNC の
+/// サーバー名を表すので、`\\server\share\...` として復元する。この分岐だけが実行環境の OS に
+/// 依存する部分で、それ以外の文字列変換は `uri_str_to_unix_path` / `uri_str_to_windows_path` という
+/// 純粋関数に閉じてある。
 pub fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
     let rest = uri.as_str().strip_prefix("file://")?;
-    // `file://host/path` のような権限部つきはローカルパスに落とせない。
-    // 正当な形は権限部が空の `file:///path` だけ。
+    // クエリやフラグメントは file URI では意味を持たないので捨てる。
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let path = if cfg!(windows) {
+        uri_str_to_windows_path(rest)?
+    } else {
+        uri_str_to_unix_path(rest)?
+    };
+    Some(PathBuf::from(path))
+}
+
+/// パス文字列を `file:` URI 文字列に変換する（純粋関数）。
+///
+/// UNC (`\\server\share\...`) → ドライブレター (`C:\...` / `C:/...`) → それ以外（Unix の絶対パス）
+/// の順に文字列の形で判定する。ドライブレターのコロンは URI 上そのまま残す必要がある
+/// （`%3A` にすると多くの言語サーバー実装がドライブパスとして認識できない）ため、
+/// ドライブレター部分だけ `encode` を通さず生で連結する。
+fn path_str_to_uri(text: &str) -> String {
+    if let Some(unc_rest) = text.strip_prefix(r"\\") {
+        // UNC パス: \\server\share\a.rs → file://server/share/a.rs
+        format!("file://{}", encode(&unc_rest.replace('\\', "/")))
+    } else if let Some(drive) = windows_drive_prefix(text) {
+        // ドライブレターパス: C:\Users\foo\main.rs → file:///C:/Users/foo/main.rs
+        let rest = text[drive.len()..].replace('\\', "/");
+        format!("file:///{drive}{}", encode(&rest))
+    } else {
+        // Unix の絶対パス: /home/foo/main.rs → file:///home/foo/main.rs
+        format!("file://{}", encode(text))
+    }
+}
+
+/// 先頭が `<英字1文字>:` ならドライブレター部分（例: `"C:"`）を返す。
+fn windows_drive_prefix(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':').then(|| &text[..2])
+}
+
+/// `file://` を取り除いた残り部分を Unix のパス文字列に戻す（純粋関数）。
+///
+/// 正当な形は権限部が空の `/path` だけ。権限部つき（`host/path`）はローカルパスとして
+/// 意味を持たないため `None` にする。
+fn uri_str_to_unix_path(rest: &str) -> Option<String> {
     if !rest.starts_with('/') {
         return None;
     }
-    // クエリやフラグメントは file URI では意味を持たないので捨てる。
-    let path = rest.split(['?', '#']).next().unwrap_or(rest);
-    Some(PathBuf::from(decode(path)?))
+    decode(rest)
+}
+
+/// `file://` を取り除いた残り部分を Windows のパス文字列に戻す（純粋関数）。
+///
+/// 先頭が `/` ならドライブレターパス（`/C:/...` → `C:\...`）、それ以外（権限部つき）は
+/// UNC パス（`server/share/...` → `\\server\share\...`）として復元する。
+fn uri_str_to_windows_path(rest: &str) -> Option<String> {
+    if let Some(body) = rest.strip_prefix('/') {
+        Some(decode(body)?.replace('/', "\\"))
+    } else if !rest.is_empty() {
+        Some(format!(r"\\{}", decode(rest)?.replace('/', "\\")))
+    } else {
+        None
+    }
 }
 
 /// RFC 3986 の unreserved 文字とパス区切りだけをそのまま残し、他はすべて `%XX` にする。
@@ -116,5 +184,52 @@ mod tests {
     fn 権限部つきの_file_uri_はパスにならない() {
         let uri = Uri::from_str("file://host/a.rs").unwrap();
         assert!(uri_to_path(&uri).is_none());
+    }
+
+    // ここから下は Windows 形式パスの変換テスト。実行環境の OS に関わらず検証できるよう、
+    // OS 判定を挟む `path_to_uri` / `uri_to_path` ではなく、文字列だけを扱う純粋関数
+    // (`path_str_to_uri` / `uri_str_to_windows_path`) を直接呼ぶ。
+
+    #[test]
+    fn ドライブレター付きパスを_uri_へ変換できる() {
+        let uri = path_str_to_uri(r"C:\Users\foo\main.rs");
+        assert_eq!(uri, "file:///C:/Users/foo/main.rs");
+    }
+
+    #[test]
+    fn uri_からドライブレター付きパスへ往復できる() {
+        let original = r"C:\Users\foo\main.rs";
+        let uri = path_str_to_uri(original);
+        let rest = uri.strip_prefix("file://").unwrap();
+        assert_eq!(uri_str_to_windows_path(rest).unwrap(), original);
+    }
+
+    #[test]
+    fn 空白や日本語を含む_windows_パスがエンコードデコード往復する() {
+        let original = r"C:\Users\foo\My Documents\設計 メモ.md";
+        let uri = path_str_to_uri(original);
+        assert_eq!(
+            uri,
+            "file:///C:/Users/foo/My%20Documents/%E8%A8%AD%E8%A8%88%20%E3%83%A1%E3%83%A2.md"
+        );
+        let rest = uri.strip_prefix("file://").unwrap();
+        assert_eq!(uri_str_to_windows_path(rest).unwrap(), original);
+    }
+
+    #[test]
+    fn unc_パスが往復する() {
+        let original = r"\\server\share\a.rs";
+        let uri = path_str_to_uri(original);
+        assert_eq!(uri, "file://server/share/a.rs");
+        let rest = uri.strip_prefix("file://").unwrap();
+        assert_eq!(uri_str_to_windows_path(rest).unwrap(), original);
+    }
+
+    #[test]
+    fn unix_パスの往復はこれまで通り動く() {
+        let original = "/Users/foo/My Documents/設計 メモ.md";
+        let uri = path_str_to_uri(original);
+        let rest = uri.strip_prefix("file://").unwrap();
+        assert_eq!(uri_str_to_unix_path(rest).unwrap(), original);
     }
 }

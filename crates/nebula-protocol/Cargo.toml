@@ -11,3 +11,10 @@ description = "Nebula Code の GUI プロセスとバックエンドプロセス
 serde.workspace = true
 rmp-serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# 名前付きパイプを重畳 (overlapped) I/O で読み書きするために使う。
+# std には名前付きパイプのクライアントが無く、同期ハンドルでは読み書きが
+# 直列化されて使いものにならない (詳細は src/transport/windows.rs を参照)。
+windows-sys.workspace = true
+

@@ -123,6 +123,7 @@ fn main() {
 /// が内部で行う待ち合わせ) に影響されない。バックエンド側にも同名の関数
 /// (`nebula-backend/src/main.rs`) があるが、GUI は nebula-protocol と
 /// nebula-core にしか依存しておらず import できないため、ここに複製している。
+#[cfg(unix)]
 fn reset_signal_state() {
     // SAFETY: 他のスレッドを作る前の main 先頭でのみ呼ぶ。ここで設定したマスクは
     // 以降に作られる全スレッドへ引き継がれる。
@@ -135,3 +136,9 @@ fn reset_signal_state() {
         libc::signal(libc::SIGTERM, libc::SIG_DFL);
     }
 }
+
+/// Windows には `exec` を越えて引き継がれるシグナルマスクという仕組みが無く、
+/// 子プロセスの回収も `Child::wait` (`WaitForSingleObject`) で完結する。
+/// 戻すべき状態が無いので何もしない。
+#[cfg(windows)]
+fn reset_signal_state() {}

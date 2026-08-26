@@ -3,20 +3,20 @@ use nebula_protocol::{
     ClientMessage, FrameDecoder, PROTOCOL_VERSION, Request, RequestId, Response, ServerMessage,
     encode_frame,
 };
+use nebula_protocol::transport::{Stream, connect};
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 #[test]
 #[ignore = "稼働中の GUI に対して手動で実行する診断"]
 fn 稼働中のバックエンドが開いているワークスペースを列挙する() {
-    let socket = nebula_protocol::default_socket_path();
-    let mut stream = UnixStream::connect(&socket)
-        .unwrap_or_else(|e| panic!("{} に接続できない: {e}", socket.display()));
+    let endpoint = nebula_protocol::default_endpoint();
+    let mut stream = connect(&endpoint)
+        .unwrap_or_else(|e| panic!("{} に接続できない: {e}", endpoint.display()));
     stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     let mut decoder = FrameDecoder::new();
 
-    let call = |stream: &mut UnixStream, decoder: &mut FrameDecoder, req: Request| -> Response {
+    let call = |stream: &mut Stream, decoder: &mut FrameDecoder, req: Request| -> Response {
         let id = RequestId::next();
         stream
             .write_all(&encode_frame(&ClientMessage::Request { id, request: req }).unwrap())

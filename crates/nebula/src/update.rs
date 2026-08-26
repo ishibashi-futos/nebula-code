@@ -229,14 +229,20 @@ pub fn plan_update(current: &Version, latest: &Version, args: UpdateArgs) -> Upd
 /// の慣例に合わせ、`std::env::consts::OS`/`ARCH` の生の値
 /// (`"macos"`/`"aarch64"`) ではなく `darwin`/`arm64` のような一般的な呼び名へ
 /// 変換する。
+///
+/// Windows だけは配布名の末尾に `.exe` が付く (`release.yml` の `ext:` フィールド
+/// を参照)。手で download した利用者がそのまま実行できるようにするための措置で、
+/// 他の OS には拡張子を付けない。
 pub fn resolve_asset_name(binary: &str, os: &str, arch: &str) -> Option<String> {
     let platform = match (os, arch) {
         ("macos", "aarch64") => "darwin-arm64",
         ("macos", "x86_64") => "darwin-x64",
         ("linux", "x86_64") => "linux-x64",
+        ("windows", "x86_64") => "windows-x64",
         _ => return None,
     };
-    Some(format!("{binary}-{platform}"))
+    let ext = if os == "windows" { ".exe" } else { "" };
+    Some(format!("{binary}-{platform}{ext}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -387,15 +393,19 @@ fn classify_io_error(err: std::io::Error, path: &Path) -> UpdateError {
     }
 }
 
-/// 生の errno を直接見て権限エラー (EACCES/EPERM) か判定する。
+/// `err.kind()` が権限エラーかどうかで判定する。
 ///
-/// `std::io::ErrorKind::PermissionDenied` への対応関係は Rust のバージョンや
-/// プラットフォームで揺れてきたため、`raw_os_error()` で両方を直接突き合わせる。
-/// `std::io::Error::from_raw_os_error` で合成できるので、実際に権限の無い
-/// ファイルを用意しなくても (CI が root で動くと権限チェック自体が効かない
-/// ことがある) 単体テストできる。
+/// 以前は `raw_os_error()` で Unix の生の errno (EACCES/EPERM) を直接
+/// 突き合わせていたが、`libc` は `[target.'cfg(unix)'.dependencies]` にしか
+/// 無く Windows では参照できない。`std::io::ErrorKind::PermissionDenied` は
+/// Unix の EACCES/EPERM だけでなく Windows の ERROR_ACCESS_DENIED も同じ
+/// 種類へ std 自身がマップしてくれるので、プラットフォーム別の errno を
+/// 自分で列挙する必要が無く、`libc` に依存しなくてもこの判定だけで足りる。
+/// `std::io::Error::from(ErrorKind::PermissionDenied)` で合成できるので、
+/// 実際に権限の無いファイルを用意しなくても (CI が root で動くと権限
+/// チェック自体が効かないことがある) 単体テストできる。
 fn is_permission_error(err: &std::io::Error) -> bool {
-    matches!(err.raw_os_error(), Some(code) if code == libc::EACCES || code == libc::EPERM)
+    err.kind() == std::io::ErrorKind::PermissionDenied
 }
 
 // ---------------------------------------------------------------------------
@@ -416,11 +426,18 @@ const DOWNLOAD_CONNECT_TIMEOUT_SECS: &str = "10";
 /// として起動せず自前で走査する) を踏襲するが、`nebula` クレートは
 /// `nebula-backend` に依存できない (GUI とバックエンドはプロセスとして分離され、
 /// IPC 経由でしかやり取りしない) ため、ここに複製している。
+///
+/// `tools::find_executable` と違い `PATHEXT` の候補列挙はしない — 探しているのは
+/// 任意のユーザーコマンドではなく `curl` という決まった 1 本で、Windows では
+/// 拡張子なしの `curl` ファイルはそもそも実行できない (`.exe` が要る) ため、
+/// `std::env::consts::EXE_SUFFIX` で組み立てた `curl.exe` だけを候補にすれば足りる
+/// (Windows 10 以降は標準で `curl.exe` が入っている)。
 fn find_curl() -> Result<PathBuf, UpdateError> {
     let path = std::env::var_os("PATH")
         .ok_or_else(|| UpdateError::Network("PATH 環境変数が設定されていません".to_string()))?;
+    let curl_name = format!("curl{}", std::env::consts::EXE_SUFFIX);
     std::env::split_paths(&path)
-        .map(|dir| dir.join("curl"))
+        .map(|dir| dir.join(&curl_name))
         .find(|candidate| is_executable(candidate))
         .ok_or_else(|| {
             UpdateError::Network("curl が見つかりません。インストールしてください".to_string())
@@ -428,11 +445,19 @@ fn find_curl() -> Result<PathBuf, UpdateError> {
 }
 
 /// ファイルが実行可能か。`tools::is_executable` の複製 (理由は `find_curl` を参照)。
+/// Windows には実行ビットの概念が無いため、ファイルとして存在すれば実行可能と
+/// みなす (`tools.rs` の同名関数と同じ判定)。
+#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path)
         .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 /// GitHub Releases API から最新リリースの JSON 本文を取得する。
@@ -520,10 +545,18 @@ fn download_to_file(url: &str, dest: &Path) -> Result<(), UpdateError> {
 /// ダウンロードしたファイルに実行権限 (0o755) を付ける。curl はダウンロードした
 /// ファイルに実行権限を付けないため必須 (`tools::is_executable` 同様
 /// `PermissionsExt` を使う。前例: `nebula-backend/src/tools.rs`)。
+#[cfg(unix)]
 fn set_executable(path: &Path) -> Result<(), UpdateError> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
         .map_err(|e| classify_io_error(e, path))
+}
+
+/// Windows には実行ビットの概念が無く、ダウンロードしたファイルはパスが
+/// `.exe` で終わっていればそのまま実行できるので、何もせず成功を返す。
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> Result<(), UpdateError> {
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -666,13 +699,27 @@ fn replace_one(target: &Path, tmp_path: &Path) -> ReplaceOutcome {
 /// ここで黙って握りつぶすと、GUI とバックエンドの版数が食い違ったまま誰も
 /// 気付けない状態で残ってしまう (プロトコル版数の不一致でハンドシェイクが
 /// 失敗し、GUI がバックエンドに接続できなくなる)。
-fn manual_recovery_message(original: &UpdateError, unrecovered: &[(PathBuf, PathBuf)]) -> String {
+///
+/// 復旧コマンド名 (`mv`/`move`) は呼び出し側から `move_command` として渡す。
+/// この関数自体はファイルシステムにもプラットフォームにも触れない純粋関数の
+/// ままにしておきたい (単体テストで固定するため) ので、cfg 分岐は呼び出し側
+/// (`replace_staged`) に置き、Unix 上のテストからも Windows 向けの文言を確認
+/// できるようにしてある。
+fn manual_recovery_message(
+    original: &UpdateError,
+    unrecovered: &[(PathBuf, PathBuf)],
+    move_command: &str,
+) -> String {
     let mut msg = format!(
         "{original}\nさらに、退避ファイルからの自動復旧にも失敗しました。\
          以下のコマンドを手動で実行して元に戻してください:\n"
     );
     for (target, backup) in unrecovered {
-        msg.push_str(&format!("  mv {} {}\n", backup.display(), target.display()));
+        msg.push_str(&format!(
+            "  {move_command} {} {}\n",
+            backup.display(),
+            target.display()
+        ));
     }
     msg
 }
@@ -746,8 +793,9 @@ fn replace_staged(staged: &[(PathBuf, PathBuf)]) -> Result<(), UpdateError> {
     if unrecovered.is_empty() {
         Err(error)
     } else {
+        let move_command = if cfg!(windows) { "move" } else { "mv" };
         Err(UpdateError::ManualRecoveryRequired(
-            manual_recovery_message(&error, &unrecovered),
+            manual_recovery_message(&error, &unrecovered, move_command),
         ))
     }
 }
@@ -777,7 +825,7 @@ fn install_release(release: &ReleaseInfo) -> Result<(), UpdateError> {
         .map_err(|e| UpdateError::Io(format!("実行中のパスを取得できません: {e}")))?;
     let backend_path = nebula_path
         .parent()
-        .map(|dir| dir.join("nebula-backend"))
+        .map(|dir| dir.join(format!("nebula-backend{}", std::env::consts::EXE_SUFFIX)))
         .ok_or_else(|| UpdateError::Io("実行ファイルの場所を特定できません".to_string()))?;
 
     let binaries = [("nebula", nebula_path), ("nebula-backend", backend_path)];
@@ -1050,8 +1098,20 @@ mod tests {
 
     #[test]
     fn 未対応の組み合わせはnoneになる() {
-        assert_eq!(resolve_asset_name("nebula", "windows", "x86_64"), None);
+        assert_eq!(resolve_asset_name("nebula", "windows", "aarch64"), None);
         assert_eq!(resolve_asset_name("nebula", "linux", "aarch64"), None);
+    }
+
+    #[test]
+    fn windows_x64のアセット名はexe拡張子が付く() {
+        assert_eq!(
+            resolve_asset_name("nebula", "windows", "x86_64"),
+            Some("nebula-windows-x64.exe".to_string())
+        );
+        assert_eq!(
+            resolve_asset_name("nebula-backend", "windows", "x86_64"),
+            Some("nebula-backend-windows-x64.exe".to_string())
+        );
     }
 
     /// リリース CI が作る配布名と、`resolve_asset_name` が探しに行く名前が
@@ -1067,17 +1127,19 @@ mod tests {
         const WORKFLOW: &str = include_str!("../../../.github/workflows/release.yml");
 
         // `resolve_asset_name` が対応している (OS, アーキテクチャ) と、
-        // そこから決まるプラットフォーム名。
+        // そこから決まるプラットフォーム名・拡張子 (Windows だけ `.exe` が付く。
+        // `release.yml` の `ext:` フィールドと揃えること)。
         let supported = [
-            ("macos", "aarch64", "darwin-arm64"),
-            ("macos", "x86_64", "darwin-x64"),
-            ("linux", "x86_64", "linux-x64"),
+            ("macos", "aarch64", "darwin-arm64", ""),
+            ("macos", "x86_64", "darwin-x64", ""),
+            ("linux", "x86_64", "linux-x64", ""),
+            ("windows", "x86_64", "windows-x64", ".exe"),
         ];
 
-        for (os, arch, platform) in supported {
+        for (os, arch, platform, ext) in supported {
             assert_eq!(
                 resolve_asset_name("nebula", os, arch),
-                Some(format!("nebula-{platform}")),
+                Some(format!("nebula-{platform}{ext}")),
                 "{os}/{arch} の解決結果が変わっている"
             );
             assert!(
@@ -1302,26 +1364,21 @@ mod tests {
     // --- 権限エラーの判定 ---
 
     #[test]
-    fn eaccesは権限エラーとして分類される() {
-        let err = std::io::Error::from_raw_os_error(libc::EACCES);
+    fn permission_deniedは権限エラーとして分類される() {
+        let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         assert!(is_permission_error(&err));
     }
 
     #[test]
-    fn epermは権限エラーとして分類される() {
-        let err = std::io::Error::from_raw_os_error(libc::EPERM);
-        assert!(is_permission_error(&err));
-    }
-
-    #[test]
-    fn enoentは権限エラーとして分類されない() {
-        let err = std::io::Error::from_raw_os_error(libc::ENOENT);
+    fn notfoundは権限エラーとして分類されない() {
+        // ENOENT 相当。権限エラーではないものの代表として使う。
+        let err = std::io::Error::from(std::io::ErrorKind::NotFound);
         assert!(!is_permission_error(&err));
     }
 
     #[test]
     fn classify_io_errorは権限エラーを専用メッセージにする() {
-        let err = std::io::Error::from_raw_os_error(libc::EACCES);
+        let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         let classified = classify_io_error(err, Path::new("/usr/local/bin/nebula"));
         assert!(matches!(classified, UpdateError::PermissionDenied(_)));
         assert!(classified.to_string().contains("書き込み権限がありません"));
@@ -1329,7 +1386,8 @@ mod tests {
 
     #[test]
     fn classify_io_errorは権限以外のエラーをioに分類する() {
-        let err = std::io::Error::from_raw_os_error(libc::ENOSPC);
+        // ENOSPC (ディスク容量不足) 相当。
+        let err = std::io::Error::from(std::io::ErrorKind::StorageFull);
         let classified = classify_io_error(err, Path::new("/usr/local/bin/nebula"));
         assert!(matches!(classified, UpdateError::Io(_)));
     }
@@ -1418,10 +1476,23 @@ mod tests {
             PathBuf::from("/usr/local/bin/nebula"),
             PathBuf::from("/usr/local/bin/nebula.old-123"),
         )];
-        let msg = manual_recovery_message(&original, &unrecovered);
+        let msg = manual_recovery_message(&original, &unrecovered, "mv");
         assert!(msg.contains("/usr/local/bin/nebula.old-123"), "{msg}");
         assert!(msg.contains("/usr/local/bin/nebula"), "{msg}");
         assert!(msg.contains("手動"), "{msg}");
+        assert!(msg.contains("mv "), "{msg}");
+    }
+
+    #[test]
+    fn 手動復旧メッセージは渡されたコマンド名を使う() {
+        let original = UpdateError::Io("rename失敗".to_string());
+        let unrecovered = vec![(
+            PathBuf::from(r"C:\nebula\nebula.exe"),
+            PathBuf::from(r"C:\nebula\nebula.exe.old-123"),
+        )];
+        let msg = manual_recovery_message(&original, &unrecovered, "move");
+        assert!(msg.contains("move "), "{msg}");
+        assert!(!msg.contains("mv "), "{msg} には mv が含まれてはいけない");
     }
 
     // --- フェーズ2 の結合テスト (実ファイルに対して rename を行う) ---

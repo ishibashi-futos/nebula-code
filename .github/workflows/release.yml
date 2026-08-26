@@ -47,14 +47,25 @@ jobs:
             target: aarch64-apple-darwin
             platform: darwin-arm64
             native: true
+            ext: ""
           - os: macos-latest
             target: x86_64-apple-darwin
             platform: darwin-x64
             native: false
+            ext: ""
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             platform: linux-x64
             native: true
+            ext: ""
+          # Windows は実行ファイルに `.exe` が付く。配布名にも付けたままにするのは、
+          # 手で download した利用者がそのまま実行できるようにするため。
+          # update.rs の `resolve_asset_name` もこの名前を組み立てている。
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x64
+            native: true
+            ext: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -76,22 +87,33 @@ jobs:
 
       - name: 配布名へ揃える
         shell: bash
+        env:
+          EXT: ${{ matrix.ext }}
         run: |
+          set -euo pipefail
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/nebula" "dist/nebula-${{ matrix.platform }}"
-          cp "target/${{ matrix.target }}/release/nebula-backend" "dist/nebula-backend-${{ matrix.platform }}"
+          for bin in nebula nebula-backend; do
+            cp "target/${{ matrix.target }}/release/${bin}${EXT}" \
+               "dist/${bin}-${{ matrix.platform }}${EXT}"
+          done
+          # Windows のバイナリに実行ビットの概念は無いが、Git Bash 上でも
+          # chmod は成功する (何も起きない) ので分岐は要らない。
           chmod +x dist/*
 
       # native のときだけ、作った実行ファイルが本当に起動するか確かめる。
       # リンクは通ったが共有ライブラリが足りず起動しない、という配布事故を防ぐ。
       # GUI は画面が要るので、画面の要らないバックエンドだけを起こして落とす。
-      - name: 起動できることを確かめる
-        if: matrix.native
+      #
+      # 「起動した」の判定は待ち受けが開いたかどうかで見る。その確かめ方が
+      # プラットフォームで違う (ソケットファイルの有無 / パイプ名前空間の走査)
+      # ため、ステップを 2 つに分けている。
+      - name: 起動できることを確かめる (Unix)
+        if: matrix.native && runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
           SOCK="${RUNNER_TEMP}/nebula-smoke-$$.sock"
-          "dist/nebula-backend-${{ matrix.platform }}" --socket "$SOCK" &
+          "dist/nebula-backend-${{ matrix.platform }}" --endpoint "$SOCK" &
           PID=$!
           for _ in $(seq 1 100); do
             [ -S "$SOCK" ] && break
@@ -105,6 +127,33 @@ jobs:
           echo "バックエンドは起動してソケットを開いた"
           kill "$PID"
           wait "$PID" 2>/dev/null || true
+
+      - name: 起動できることを確かめる (Windows)
+        if: matrix.native && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = "nebula-smoke-$PID"
+          $backend = Start-Process -PassThru -NoNewWindow `
+            -FilePath "dist/nebula-backend-${{ matrix.platform }}.exe" `
+            -ArgumentList '--endpoint', "\\.\pipe\$name"
+          # 名前付きパイプはファイルシステムに実体を持たないので、
+          # パイプ名前空間そのものを列挙して名前の有無を見る。
+          $opened = $false
+          for ($i = 0; $i -lt 100; $i++) {
+            if ([System.IO.Directory]::GetFiles('\\.\pipe\') -match [regex]::Escape($name)) {
+              $opened = $true
+              break
+            }
+            Start-Sleep -Milliseconds 100
+          }
+          if (-not $opened) {
+            Write-Error 'バックエンドが名前付きパイプを開けませんでした'
+            $backend | Stop-Process -Force
+            exit 1
+          }
+          Write-Host 'バックエンドは起動して名前付きパイプを開いた'
+          $backend | Stop-Process -Force
 
       - uses: actions/upload-artifact@v4
         with:

@@ -3301,6 +3301,7 @@ dependencies = [
  "smol",
  "unicode-segmentation",
  "unicode-width",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3350,6 +3351,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

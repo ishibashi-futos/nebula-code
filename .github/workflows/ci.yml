@@ -30,7 +30,7 @@ jobs:
   test:
     name: ${{ matrix.label }}
     strategy:
-      # 片方が落ちても、もう片方の結果は知りたい。
+      # 1 つが落ちても、他のプラットフォームの結果は知りたい。
       fail-fast: false
       matrix:
         include:
@@ -38,6 +38,8 @@ jobs:
             label: macOS (arm64)
           - os: ubuntu-latest
             label: Linux (x64)
+          - os: windows-latest
+            label: Windows (x64)
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

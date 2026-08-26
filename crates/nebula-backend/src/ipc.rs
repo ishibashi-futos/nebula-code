@@ -1,83 +1,48 @@
-//! Unix ドメインソケット上の IPC サーバー。
+//! IPC サーバー。
 //!
 //! 1 接続 = 1 GUI ウィンドウ。接続ごとに読み取り・書き込み・イベント転送の
 //! 3 タスクを持つ。要求の処理は個別タスクへ切り出すので、重い要求 (LSP の初期化など) が
 //! 後続のキー入力を待たせることはない。
+//!
+//! 待ち受けの実体はプラットフォームで分かれる (Unix ドメインソケット / 名前付きパイプ)。
+//! 分岐は `unix` / `windows` サブモジュールに閉じ込め、ここから下は
+//! 「バイトストリームを受け付けて読み書きする」以上のことを知らない。
+
+#[cfg_attr(windows, path = "ipc/windows.rs")]
+#[cfg_attr(unix, path = "ipc/unix.rs")]
+mod platform;
 
 use crate::dispatch;
 use crate::state::BackendState;
 use nebula_protocol::{
-    ClientMessage, Event, FrameDecoder, ProtocolError, RequestId, Request, ServerMessage,
-    encode_frame,
+    ClientMessage, Event, FrameDecoder, Request, RequestId, ServerMessage, encode_frame,
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task::AbortHandle;
 
-/// バックエンドが 1 つだけ動くことを保証しつつ、ソケットを掴む。
-///
-/// 排他は `UnixListener::bind` そのものに任せる。bind はソケットファイルの作成と
-/// 待ち受け開始を 1 回のシステムコールで行うので、複数プロセスが同時に呼んでも
-/// 成功するのは 1 つだけ。
-///
-/// 別途ロックファイルを置く方式は使わない。「ロックがあるが接続できない = 残骸」
-/// という判定が、勝者が bind する直前の一瞬にも成立してしまい、敗者がロックを
-/// 奪って二重起動する。実際に GUI を 3 つ同時起動して再現した。
-///
-/// 異常終了でソケットファイルだけが残った場合は、接続できないことを 2 回
-/// 確かめてから片付ける。1 回で判断しないのは、bind と listen の間の
-/// ごく短い時間に接続が拒否されうるため。
-async fn acquire_listener(socket_path: &Path) -> std::io::Result<Option<UnixListener>> {
-    for _ in 0..3 {
-        match UnixListener::bind(socket_path) {
-            Ok(listener) => return Ok(Some(listener)),
-            // 既にファイルがある場合のエラー種別は OS で違う。
-            // macOS は EEXIST (AlreadyExists)、Linux は EADDRINUSE (AddrInUse)。
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::AddrInUse | std::io::ErrorKind::AlreadyExists
-                ) =>
-            {
-                if UnixStream::connect(socket_path).await.is_ok() {
-                    return Ok(None);
-                }
-                // 待ち受け開始の直前かもしれないので、間を置いてもう一度だけ確かめる。
-                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                if UnixStream::connect(socket_path).await.is_ok() {
-                    return Ok(None);
-                }
-                std::fs::remove_file(socket_path)?;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(None)
-}
-
-/// ソケットを作って接続を待ち受ける。
+/// 待ち受けを開始して接続を待つ。
 ///
 /// 既に別のバックエンドが動いていた場合は何もせずに `Ok(())` で戻る。
 /// これは失敗ではなく「先客が居たので譲った」という正常な結末。
-pub async fn serve(socket_path: &Path, state: Arc<BackendState>) -> std::io::Result<()> {
-    let Some(listener) = acquire_listener(socket_path).await? else {
+pub async fn serve(endpoint: &Path, state: Arc<BackendState>) -> std::io::Result<()> {
+    let Some(mut listener) = platform::acquire(endpoint).await? else {
         eprintln!(
             "nebula-backend: {} で既に別のバックエンドが動作しているため終了します",
-            socket_path.display()
+            endpoint.display()
         );
         return Ok(());
     };
-    eprintln!("nebula-backend: {} で待機中", socket_path.display());
+    eprintln!("nebula-backend: {} で待機中", endpoint.display());
 
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let (stream, _) = accepted?;
+                let stream = accepted?;
                 let state = state.clone();
                 let shutdown = shutdown_tx.clone();
                 tokio::spawn(async move {
@@ -93,17 +58,17 @@ pub async fn serve(socket_path: &Path, state: Arc<BackendState>) -> std::io::Res
         }
     }
     state.shutdown().await;
-    let _ = std::fs::remove_file(socket_path);
+    platform::cleanup(endpoint);
     Ok(())
 }
 
 /// 1 接続ぶんの処理。
 async fn handle_connection(
-    stream: UnixStream,
+    stream: platform::Stream,
     state: Arc<BackendState>,
     shutdown: mpsc::Sender<()>,
 ) -> std::io::Result<()> {
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, mut writer) = platform::split(stream);
     // 応答とイベントを 1 本の書き込みタスクに集約する。フレームが混ざらないようにするため。
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ServerMessage>();
 
@@ -196,7 +161,7 @@ async fn handle_client_message(
             if matches!(request, Request::Shutdown) {
                 // この Ack は best-effort。送信待ち行列へ載せた直後に停止へ入るので、
                 // 実際に書き出される前に接続が閉じることがある。
-                // 停止を待ちたい側は Ack ではなくソケットファイルが消えるのを見ること
+                // 停止を待ちたい側は Ack ではなくプロセスそのものの終了を見ること
                 // (GUI 側 `replace_backend` がそうしている)。
                 let _ = out.send(ServerMessage::Response {
                     id,
@@ -215,113 +180,5 @@ async fn handle_client_message(
             });
             inflight.lock().await.insert(id, task.abort_handle());
         }
-    }
-}
-
-/// バックエンドを起動して接続可能になるまで待つ。GUI から呼ぶ。
-///
-/// 既に起動済みならそのまま接続する。冷間起動では GUI がウィンドウを出した後に
-/// 非同期で呼ばれるため、ここでの待ち時間は初回フレームには影響しない。
-pub async fn connect_or_spawn(
-    socket_path: &Path,
-    backend_binary: &Path,
-) -> Result<UnixStream, ProtocolError> {
-    if let Ok(stream) = UnixStream::connect(socket_path).await {
-        return Ok(stream);
-    }
-    tokio::process::Command::new(backend_binary)
-        .arg("--socket")
-        .arg(socket_path)
-        .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| ProtocolError::io(format!("バックエンドを起動できません: {e}")))?;
-
-    // 起動を待つ。指数的に間隔を伸ばし、合計で約 5 秒待つ。
-    let mut delay = std::time::Duration::from_millis(2);
-    for _ in 0..24 {
-        tokio::time::sleep(delay).await;
-        if let Ok(stream) = UnixStream::connect(socket_path).await {
-            return Ok(stream);
-        }
-        delay = (delay * 2).min(std::time::Duration::from_millis(500));
-    }
-    Err(ProtocolError::io(format!(
-        "バックエンドに接続できませんでした: {}",
-        socket_path.display()
-    )))
-}
-
-/// バックエンド実行ファイルの位置を推定する。
-///
-/// GUI と同じディレクトリに置かれている前提。開発中の `target/debug` でも
-/// 配布物の `Nebula.app/Contents/MacOS` でも同じ規則で解決できる。
-pub fn backend_binary_path() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("nebula-backend")))
-        .unwrap_or_else(|| PathBuf::from("nebula-backend"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_socket(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "nebula-test-{name}-{}.sock",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        path
-    }
-
-    #[tokio::test]
-    async fn 二つ目のバックエンドは起動を譲る() {
-        let socket = temp_socket("dup");
-        let first = acquire_listener(&socket).await.unwrap();
-        assert!(first.is_some(), "1 つ目はソケットを掴めるはず");
-        let second = acquire_listener(&socket).await.unwrap();
-        assert!(second.is_none(), "2 つ目は譲るはず");
-
-        drop(first);
-        let _ = std::fs::remove_file(&socket);
-    }
-
-    #[tokio::test]
-    async fn 応答しない残骸は片付けて掴み直す() {
-        let socket = temp_socket("stale");
-        // 待ち受けていないのにソケット位置にファイルだけがある状態。
-        std::fs::write(&socket, "").unwrap();
-
-        let listener = acquire_listener(&socket).await.unwrap();
-        assert!(listener.is_some(), "残骸は片付けて掴み直せるはず");
-
-        drop(listener);
-        let _ = std::fs::remove_file(&socket);
-    }
-
-    /// 同時起動で 1 つだけが勝つことを、実際に並行させて確かめる。
-    ///
-    /// 掴んだ待ち受けは最後まで保持する。途中で落とすとソケットファイルだけが残り、
-    /// 後続が「残骸」とみなして掴み直してしまい、検査したい競合とは別の状況になる。
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn 同時に起動しても勝者は一つだけ() {
-        let socket = temp_socket("race");
-        let mut handles = Vec::new();
-        for _ in 0..8 {
-            let socket = socket.clone();
-            handles.push(tokio::spawn(async move {
-                acquire_listener(&socket).await.unwrap()
-            }));
-        }
-        let mut listeners = Vec::new();
-        for handle in handles {
-            if let Some(listener) = handle.await.unwrap() {
-                listeners.push(listener);
-            }
-        }
-        assert_eq!(listeners.len(), 1, "勝者が {} 個になった", listeners.len());
-        drop(listeners);
-        let _ = std::fs::remove_file(&socket);
     }
 }

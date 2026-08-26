@@ -9,30 +9,34 @@ use nebula_protocol::{
     ClientMessage, Edit, FrameDecoder, ListMarker, PROTOCOL_VERSION, PreviewBlock, Request,
     RequestId, Response, ServerMessage, TextRange, encode_frame,
 };
+use nebula_protocol::transport::{Stream, connect};
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// テスト用のバックエンドを別スレッドで動かし、接続済みのソケットを返す。
+/// テスト用のバックエンドを別スレッドで動かし、接続済みのストリームを返す。
+///
+/// 待ち受けも接続も本番と同じ経路 (`ipc::serve` と
+/// `nebula_protocol::transport`) を使う。Unix ドメインソケットと名前付きパイプの
+/// どちらで動いているかはここには現れず、CI がプラットフォームごとに走らせる
+/// だけで両方の経路が通しで検査される。
 struct Harness {
-    stream: UnixStream,
+    stream: Stream,
     decoder: FrameDecoder,
-    socket: PathBuf,
+    endpoint: PathBuf,
     workdir: PathBuf,
 }
 
 impl Harness {
     fn start(name: &str) -> Self {
         let unique = format!("{}-{}", std::process::id(), name);
-        let socket = std::env::temp_dir().join(format!("nebula-it-{unique}.sock"));
+        let endpoint = nebula_protocol::endpoint_named(&format!("it-{unique}"));
         let workdir = std::env::temp_dir().join(format!("nebula-it-{unique}"));
-        let _ = std::fs::remove_file(&socket);
-        let _ = std::fs::remove_file(socket.with_extension("lock"));
+        let _ = std::fs::remove_file(&endpoint);
         let _ = std::fs::remove_dir_all(&workdir);
         std::fs::create_dir_all(&workdir).expect("作業ディレクトリの作成");
 
-        let socket_for_server = socket.clone();
+        let endpoint_for_server = endpoint.clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -42,20 +46,20 @@ impl Harness {
             runtime.block_on(async move {
                 let detected = tools::detect_all().await;
                 let state = BackendState::new(detected);
-                let _ = ipc::serve(&socket_for_server, state).await;
+                let _ = ipc::serve(&endpoint_for_server, state).await;
             });
         });
 
         // 起動を待つ。
         let mut stream = None;
         for _ in 0..200 {
-            if let Ok(s) = UnixStream::connect(&socket) {
+            if let Ok(s) = connect(&endpoint) {
                 stream = Some(s);
                 break;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        let stream = stream.expect("バックエンドに接続できない");
+        let mut stream = stream.expect("バックエンドに接続できない");
         stream
             .set_read_timeout(Some(Duration::from_secs(20)))
             .expect("読み取りタイムアウトの設定");
@@ -63,7 +67,7 @@ impl Harness {
         Self {
             stream,
             decoder: FrameDecoder::new(),
-            socket,
+            endpoint,
             workdir,
         }
     }
@@ -126,8 +130,9 @@ impl Drop for Harness {
         // (crates/nebula-backend/src/ipc.rs の Shutdown 分岐)。
         // 停止させることだけが目的なので、結果は見ない。
         let _ = self.request(Request::Shutdown);
-        let _ = std::fs::remove_file(&self.socket);
-        let _ = std::fs::remove_file(self.socket.with_extension("lock"));
+        // Unix ではバックエンドが後始末を終える前にここへ来ることがあり、
+        // ソケットファイルが残る。Windows のパイプは実体を持たないので空振りする。
+        let _ = std::fs::remove_file(&self.endpoint);
         let _ = std::fs::remove_dir_all(&self.workdir);
     }
 }

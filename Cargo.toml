@@ -40,6 +40,17 @@ portable-pty = "0.9"
 
 # シグナルマスク/ハンドラの初期化に使う。std に相当する API が無い。
 libc = "0.2"
+
+# Windows の名前付きパイプを重畳 (overlapped) I/O で読み書きし、古いバックエンドの
+# 終了を待つ/強制終了するために使う。Unix 側で libc を使っているのと同じ理由で、
+# std に相当する API が無い。GUI 側は gpui の executor を持ち込めない生スレッドから
+# 同期的に読み書きするため、tokio の名前付きパイプ実装は使えない。
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
 vte = "0.15"
 
 # UAX #29 (書記素境界) と UAX #11 (表示幅) の実装。カーソル移動と端末セル幅の

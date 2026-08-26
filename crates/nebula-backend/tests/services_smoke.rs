@@ -9,15 +9,15 @@ use nebula_protocol::{
     ClientMessage, Event, FrameDecoder, Request, RequestId, Response, SearchQuery, ServerMessage,
     TerminalSpec, encode_frame,
 };
+use nebula_protocol::transport::{Stream, connect};
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 struct Client {
-    stream: UnixStream,
+    stream: Stream,
     decoder: FrameDecoder,
-    socket: PathBuf,
+    endpoint: PathBuf,
     workdir: PathBuf,
     /// 応答を待つ間に届いたイベント。あとから検査する。
     events: Vec<Event>,
@@ -26,13 +26,13 @@ struct Client {
 impl Client {
     fn start(name: &str) -> Self {
         let unique = format!("{}-{}", std::process::id(), name);
-        let socket = std::env::temp_dir().join(format!("nebula-sm-{unique}.sock"));
+        let endpoint = nebula_protocol::endpoint_named(&format!("sm-{unique}"));
         let workdir = std::env::temp_dir().join(format!("nebula-sm-{unique}"));
-        let _ = std::fs::remove_file(&socket);
+        let _ = std::fs::remove_file(&endpoint);
         let _ = std::fs::remove_dir_all(&workdir);
         std::fs::create_dir_all(&workdir).expect("作業ディレクトリ");
 
-        let socket_for_server = socket.clone();
+        let endpoint_for_server = endpoint.clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(4)
@@ -42,26 +42,26 @@ impl Client {
             runtime.block_on(async move {
                 let detected = tools::detect_all().await;
                 let state = BackendState::new(detected);
-                let _ = ipc::serve(&socket_for_server, state).await;
+                let _ = ipc::serve(&endpoint_for_server, state).await;
             });
         });
 
         let mut stream = None;
         for _ in 0..200 {
-            if let Ok(s) = UnixStream::connect(&socket) {
+            if let Ok(s) = connect(&endpoint) {
                 stream = Some(s);
                 break;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        let stream = stream.expect("バックエンドに接続できない");
+        let mut stream = stream.expect("バックエンドに接続できない");
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("タイムアウト設定");
         Self {
             stream,
             decoder: FrameDecoder::new(),
-            socket,
+            endpoint,
             workdir,
             events: Vec::new(),
         }
@@ -146,7 +146,9 @@ impl Drop for Client {
     fn drop(&mut self) {
         // Ack は届かないことがある (ipc.rs の Shutdown 分岐を参照)。結果は見ない。
         let _ = self.request(Request::Shutdown);
-        let _ = std::fs::remove_file(&self.socket);
+        // Unix ではバックエンドが後始末を終える前にここへ来ることがあり、
+        // ソケットファイルが残る。Windows のパイプは実体を持たないので空振りする。
+        let _ = std::fs::remove_file(&self.endpoint);
         let _ = std::fs::remove_dir_all(&self.workdir);
     }
 }

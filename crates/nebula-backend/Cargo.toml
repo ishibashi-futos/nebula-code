@@ -28,6 +28,9 @@ notify.workspace = true
 ignore.workspace = true
 lsp-types.workspace = true
 portable-pty.workspace = true
-libc.workspace = true
 vte.workspace = true
 unicode-width.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# シグナルマスク/ハンドラの初期化に使う。std に相当する API が無い。
+libc.workspace = true

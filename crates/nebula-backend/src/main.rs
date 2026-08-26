@@ -1,13 +1,13 @@
 //! バックエンドプロセスの起動口。
 //!
-//! 通常は GUI から自動起動されるが、`--socket` を指定して単体でも動かせる。
+//! 通常は GUI から自動起動されるが、`--endpoint` を指定して単体でも動かせる。
 
 use nebula_backend::{BackendState, git_watch, ipc, tools};
 use std::path::PathBuf;
 
 fn main() -> std::process::ExitCode {
     reset_signal_state();
-    let socket_path = parse_socket_arg().unwrap_or_else(nebula_protocol::default_socket_path);
+    let endpoint = parse_endpoint_arg().unwrap_or_else(nebula_protocol::default_endpoint);
 
     // ワーカースレッド数を絞る。バックエンドの仕事は I/O 待ちが主体で、
     // 論理コア数ぶんのスレッドを立てても起動コストが増えるだけ。
@@ -24,7 +24,7 @@ fn main() -> std::process::ExitCode {
     };
 
     runtime.block_on(async move {
-        // ソケットは検出の完了を待たずに開く。検出に時間がかかるツールが 1 つでも
+        // 待ち受けは検出の完了を待たずに開く。検出に時間がかかるツールが 1 つでも
         // あると、その間 GUI が「接続できませんでした」になってしまうため。
         // 検出は切り離して裏で走らせ、終わり次第 Event::ToolsDetected で届ける。
         let state = BackendState::new(nebula_protocol::DetectedTools::default());
@@ -36,7 +36,7 @@ fn main() -> std::process::ExitCode {
         // 保存や外部での git 操作のような、バックエンドを経由しないファイル変更でも
         // git status を追従させる (詳細は git_watch のモジュール doc を参照)。
         git_watch::spawn(state.clone());
-        match ipc::serve(&socket_path, state).await {
+        match ipc::serve(&endpoint, state).await {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("nebula-backend: {e}");
@@ -51,9 +51,10 @@ fn main() -> std::process::ExitCode {
 /// シグナルマスクと「無視 (SIG_IGN)」の設定は `exec` を越えて子へ引き継がれる。
 /// GUI プロセスはこれらを止めた状態でバックエンドを起動するため、そのままだと
 /// **SIGCHLD が届かない**。tokio が終了した子プロセスを回収できず、外部ツールの
-/// 検出 (`tools::detect_all`) が永久に終わらないので、ソケットを開く前に停止する。
+/// 検出 (`tools::detect_all`) が永久に終わらないので、待ち受けを開く前に停止する。
 /// GUI 側からは「バックエンドに接続できませんでした」に見える。
 /// 同時に SIGTERM も届かなくなり、`pkill` で止められないプロセスが残る。
+#[cfg(unix)]
 fn reset_signal_state() {
     // SAFETY: 他のスレッドを作る前の main 先頭でのみ呼ぶ。ここで設定した
     // マスクは以降に作られる全スレッドへ引き継がれる。
@@ -67,10 +68,16 @@ fn reset_signal_state() {
     }
 }
 
-fn parse_socket_arg() -> Option<PathBuf> {
+/// Windows には `exec` を越えて引き継がれるシグナルマスクという仕組みが無く、
+/// 子プロセスの回収も `Child::wait` (`WaitForSingleObject`) で完結するため、
+/// SIGCHLD が届かないことによる取りこぼしも起こらない。戻すべき状態が無い。
+#[cfg(windows)]
+fn reset_signal_state() {}
+
+fn parse_endpoint_arg() -> Option<PathBuf> {
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
-        if arg == "--socket" {
+        if arg == "--endpoint" {
             return args.next().map(PathBuf::from);
         }
     }

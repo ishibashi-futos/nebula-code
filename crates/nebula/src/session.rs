@@ -61,20 +61,76 @@ impl Default for Session {
 /// XDG の `~/.config` は使わない。実際、この環境の `~/.config` は書き込み権限が無く
 /// (`d--x--x--x`)、そちらに書こうとすると黙って失敗していた。
 /// `XDG_CONFIG_HOME` が明示されている場合だけは、利用者の指定として尊重する。
+///
+/// Windows は既定で `HOME` を設定しない。`HOME` 前提のままだと `config_dir()` が
+/// 常に `None` を返し、セッション (開いていたフォルダやサイドバー幅など) が
+/// Windows では一切保存/復元されない。Windows の作法に従って `%APPDATA%\Nebula` を使い、
+/// `APPDATA` が無い場合だけ `%USERPROFILE%\AppData\Roaming` から組み立てる。
 fn session_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("session.json"))
 }
 
+/// OS ごとの設定ディレクトリの流儀。
+///
+/// `cfg!(target_os = "windows")` はコンパイル時に確定してしまうので、macOS 上でビルドした
+/// テストからは Windows 分岐を一度も通せない。判定結果を値として受け渡せるようにしておき、
+/// `config_dir_from` をテストから任意の OS になりすまして叩けるようにする。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetOs {
+    Macos,
+    Windows,
+    Other,
+}
+
+impl TargetOs {
+    fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Macos
+        } else if cfg!(target_os = "windows") {
+            Self::Windows
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// 環境変数の値から設定ディレクトリを決める純粋関数。
+///
+/// 環境変数を直接読まないことで、macOS 上の `cargo test` からも Windows / それ以外の
+/// 分岐を検証できる。実際の環境変数の読み出しは呼び出し元の `config_dir()` でだけ行う。
+fn config_dir_from(
+    os: TargetOs,
+    xdg_config_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+    appdata: Option<PathBuf>,
+    userprofile: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(xdg) = xdg_config_home {
+        return Some(xdg.join("nebula"));
+    }
+    match os {
+        // HOME は Windows の作法ではないので、ここでは一切参照しない。
+        TargetOs::Windows => appdata
+            .or_else(|| userprofile.map(|dir| dir.join("AppData").join("Roaming")))
+            .map(|dir| dir.join("Nebula")),
+        TargetOs::Macos => Some(
+            home?
+                .join("Library")
+                .join("Application Support")
+                .join("Nebula"),
+        ),
+        TargetOs::Other => Some(home?.join(".config").join("nebula")),
+    }
+}
+
 fn config_dir() -> Option<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(xdg).join("nebula"));
-    }
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    if cfg!(target_os = "macos") {
-        Some(home.join("Library").join("Application Support").join("Nebula"))
-    } else {
-        Some(home.join(".config").join("nebula"))
-    }
+    config_dir_from(
+        TargetOs::current(),
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+        std::env::var_os("APPDATA").map(PathBuf::from),
+        std::env::var_os("USERPROFILE").map(PathBuf::from),
+    )
 }
 
 impl Session {
@@ -202,20 +258,100 @@ mod tests {
     }
 
     #[test]
-    fn 保存先は_macos_の作法に従う() {
-        // 環境変数を書き換えずに判定だけ確かめる。
-        let dir = config_dir().expect("HOME があれば必ず決まる");
-        if std::env::var_os("XDG_CONFIG_HOME").is_some() {
-            assert!(dir.ends_with("nebula"));
-        } else if cfg!(target_os = "macos") {
-            assert!(
-                dir.ends_with("Library/Application Support/Nebula"),
-                "macOS では ~/Library/Application Support に置く: {}",
-                dir.display()
-            );
-        } else {
-            assert!(dir.ends_with(".config/nebula"));
-        }
+    fn 保存先は各プラットフォームの作法に従う() {
+        // 実行環境の HOME/APPDATA には左右されない。config_dir_from に値を渡して確かめる。
+
+        // macOS: ~/Library/Application Support/Nebula
+        let macos = config_dir_from(
+            TargetOs::Macos,
+            None,
+            Some(PathBuf::from("/Users/someone")),
+            None,
+            None,
+        )
+        .expect("HOME があれば必ず決まる");
+        assert!(
+            macos.ends_with("Library/Application Support/Nebula"),
+            "macOS では ~/Library/Application Support に置く: {}",
+            macos.display()
+        );
+
+        // Windows: %APPDATA%\Nebula
+        let windows = config_dir_from(
+            TargetOs::Windows,
+            None,
+            None,
+            Some(PathBuf::from("C:/Users/someone/AppData/Roaming")),
+            None,
+        )
+        .expect("APPDATA があれば必ず決まる");
+        assert!(
+            windows.ends_with("Nebula"),
+            "Windows では %APPDATA% 配下に置く: {}",
+            windows.display()
+        );
+
+        // Windows: APPDATA が無ければ %USERPROFILE%\AppData\Roaming から組み立てる
+        let windows_fallback = config_dir_from(
+            TargetOs::Windows,
+            None,
+            None,
+            None,
+            Some(PathBuf::from("C:/Users/someone")),
+        )
+        .expect("USERPROFILE があれば必ず決まる");
+        assert!(
+            windows_fallback.ends_with("AppData/Roaming/Nebula"),
+            "APPDATA が無ければ USERPROFILE から組み立てる: {}",
+            windows_fallback.display()
+        );
+
+        // Windows: 両方あれば APPDATA を優先する
+        let windows_both = config_dir_from(
+            TargetOs::Windows,
+            None,
+            None,
+            Some(PathBuf::from("D:/CustomAppData")),
+            Some(PathBuf::from("C:/Users/someone")),
+        )
+        .expect("APPDATA があれば必ず決まる");
+        assert!(
+            windows_both.ends_with("CustomAppData/Nebula"),
+            "APPDATA と USERPROFILE の両方があれば APPDATA を優先する: {}",
+            windows_both.display()
+        );
+
+        // Windows: どちらも無ければ諦める。HOME があっても使わない。
+        assert_eq!(
+            config_dir_from(TargetOs::Windows, None, Some(PathBuf::from("/x")), None, None),
+            None,
+        );
+
+        // それ以外 (Linux 等): ~/.config/nebula
+        let other = config_dir_from(
+            TargetOs::Other,
+            None,
+            Some(PathBuf::from("/home/someone")),
+            None,
+            None,
+        )
+        .expect("HOME があれば必ず決まる");
+        assert!(other.ends_with(".config/nebula"));
+
+        // macOS / それ以外: HOME が無ければ諦める (既存の挙動を変えない)
+        assert_eq!(config_dir_from(TargetOs::Macos, None, None, None, None), None);
+        assert_eq!(config_dir_from(TargetOs::Other, None, None, None, None), None);
+
+        // XDG_CONFIG_HOME が明示されていれば OS を問わず最優先する
+        let xdg = config_dir_from(
+            TargetOs::Windows,
+            Some(PathBuf::from("/custom/config")),
+            None,
+            None,
+            None,
+        )
+        .expect("XDG_CONFIG_HOME があれば必ず決まる");
+        assert!(xdg.ends_with("nebula"));
     }
 
     #[test]
