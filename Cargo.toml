@@ -10,7 +10,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# nebula-core が let-chain (`if let ... && let ...`) を使っており、これが安定化した
+# のは 1.88。1.85 と書かれていた時期があるが、実際には `cargo +1.85 check` が
+# E0658 で落ちる。CI の「最低要求バージョン」ジョブがこの値を読んで検査する。
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/ishibashi-futos/nebula-code"
 

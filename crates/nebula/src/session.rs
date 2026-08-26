@@ -150,13 +150,13 @@ impl Session {
         let Some(path) = session_path() else {
             return;
         };
-        if let Err(e) = self.try_save_to(&path) {
-            if crate::trace_startup() {
-                eprintln!(
-                    "nebula: セッションを保存できません ({}): {e}",
-                    path.display()
-                );
-            }
+        if let Err(e) = self.try_save_to(&path)
+            && crate::trace_startup()
+        {
+            eprintln!(
+                "nebula: セッションを保存できません ({}): {e}",
+                path.display()
+            );
         }
     }
 

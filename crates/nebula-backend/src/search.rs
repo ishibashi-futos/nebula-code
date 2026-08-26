@@ -304,10 +304,10 @@ async fn run_search(
 
     // 一致が 0 件のまま終わった場合だけ標準エラーを見る。正規表現の構文エラーなど、
     // ユーザーが直せる失敗を黙って握り潰さないため。
-    if total == 0 {
-        if let Some(message) = read_stderr(stderr).await {
-            notify(events, format!("ripgrep: {message}"));
-        }
+    if total == 0
+        && let Some(message) = read_stderr(stderr).await
+    {
+        notify(events, format!("ripgrep: {message}"));
     }
 
     let _ = events.send(Event::SearchFinished {
@@ -498,10 +498,10 @@ async fn replace_in_file(
         return Ok(false);
     };
     // rg は各行に必ず改行を付けて出力する。元が改行で終わっていなければ揃える。
-    if !original.ends_with('\n') {
-        if let Some(trimmed) = replaced.strip_suffix('\n') {
-            replaced.truncate(trimmed.len());
-        }
+    if !original.ends_with('\n')
+        && let Some(trimmed) = replaced.strip_suffix('\n')
+    {
+        replaced.truncate(trimmed.len());
     }
     if replaced == original {
         return Ok(false);

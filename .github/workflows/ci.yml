@@ -1,13 +1,15 @@
-# push と pull request のたびに、対応プラットフォームでビルドとテストを通す。
+# push と pull request のたびに、対応プラットフォームでビルド・整形・lint・テストを通す。
 #
-# ここで意図的に**やっていない**こと:
-#   - `cargo fmt --check`: 既存コードに 95 箇所の非準拠があり、入れた瞬間に赤になる。
-#     揃えるなら整形だけの独立したコミットを先に作ること。
-#   - `cargo clippy -D warnings`: 既存コードに 25 件の指摘があり、同じ理由で入れていない。
-#   - 最低要求バージョン (rust-version = 1.85) の検査: 依存クレートが 1.85 で
-#     通るかを確かめられていないため、赤になるか分からないものを門番にはしない。
-# いずれも「まず既存の指摘を片付けてから門番にする」順序でないと、
-# 赤が常態化して CI が読まれなくなる。
+# 整形 (`cargo fmt --check`) と lint (`cargo clippy -D warnings`) は、以前は
+# 「既存コードに指摘が残っていて入れた瞬間に赤になる」ため入れていなかった。
+# v0.1.0 に向けて整形だけのコミットと lint 解消だけのコミットを先に入れたので、
+# ここで門番にしている。指摘を残したまま門番にすると赤が常態化して CI が
+# 読まれなくなる、という順序の問題だった。
+#
+# 整形と lint を 3 プラットフォームすべてで回すのは冗長に見えるが、そうしていない。
+# このコードベースは `cfg(unix)` / `cfg(windows)` で実装が分かれており、
+# 片方の OS でしかコンパイルされないコードがある。1 OS だけで回すと、
+# もう片方の分岐の指摘を取りこぼす。
 name: CI
 
 on:
@@ -49,10 +51,19 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
 
+      # 整形はビルドを待たずに分かるので先に置く。落ちたときに待たされる時間が短い。
+      - name: 整形
+        run: cargo fmt --all -- --check
+
       # --locked を付けるのは、Cargo.lock を更新しないと通らない変更が
       # 黙って混ざるのを防ぐため。リリースと同じ依存で検査する。
       - name: ビルド
         run: cargo build --workspace --all-targets --locked
+
+      # `--all-targets` を付けるのは、テストコードの指摘も拾うため。
+      # dead-code 警告も `-D warnings` の対象に入る (rustc の lint なので)。
+      - name: lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # --no-fail-fast を付けるのは、テストの実行単位 (クレート・結合テスト) が
       # 複数あり、既定では最初に落ちた単位で打ち切られるため。1 つの失敗で
@@ -60,3 +71,39 @@ jobs:
       # Windows のジョブは 1 周 10 分以上かかるので差が大きい。
       - name: テスト
         run: cargo test --workspace --locked --no-fail-fast
+
+  # `rust-version` が本当に通る版であることを確かめる。
+  #
+  # 以前ここに検査が無かったせいで `rust-version = "1.85"` が実際には通らない
+  # (nebula-core が let-chain を使っており、これは 1.88 で安定化した) まま
+  # 公称され続けていた。値だけ書いて確かめないと同じことが起きるので門番にする。
+  #
+  # 検査は `cargo check` だけにとどめる。ビルドとテストは上のジョブが安定版で
+  # 通しており、ここで見たいのは「宣言した最小版でコンパイルが通るか」だけ。
+  #
+  # 1 OS だけで回すことは承知のうえの穴を残す: `cfg(windows)` の分岐は
+  # ubuntu では一度もコンパイルされないので、そちら側にだけ新しい構文が
+  # 入っても素通りする。3 OS へ広げるとリリース前の待ち時間が増えるので、
+  # v0.1.0 では穴を認めてこの形にしている。
+  msrv:
+    name: 最低要求バージョン
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rust-version を Cargo.toml から読む
+        id: msrv
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "宣言されている最低要求バージョン: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+          cache-key: msrv-${{ steps.msrv.outputs.version }}
+
+      - name: 検査
+        run: cargo check --workspace --all-targets --locked

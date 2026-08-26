@@ -10,7 +10,7 @@ Rust と [GPUI](https://www.gpui.rs/) のネイティブ描画性能を使った
 
 | | |
 |---|---|
-| Rust | 1.85 以上 (edition 2024) |
+| Rust | 1.88 以上 (edition 2024) |
 | macOS | Xcode + Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`) |
 | Linux | Vulkan ドライバ、X11 または Wayland の開発パッケージ |
 | Windows | Visual Studio Build Tools (MSVC) と Windows SDK。DirectX と DirectWrite は SDK に含まれる |
@@ -125,7 +125,7 @@ cargo test --workspace
 
 | ワークフロー | いつ動くか | すること |
 |---|---|---|
-| `.github/workflows/ci.yml` | push (`main` / `feat/**`)、pull request、手動 | macOS(arm64)・Linux(x64)・Windows(x64) で `cargo build --locked` と `cargo test --locked` |
+| `.github/workflows/ci.yml` | push (`main` / `feat/**`)、pull request、手動 | macOS(arm64)・Linux(x64)・Windows(x64) で整形・ビルド・lint・テスト。あわせて `rust-version` に書いた最低要求バージョンでコンパイルが通るかも検査する |
 | `.github/workflows/release.yml` | タグ push (`v*`)、手動 | 4 プラットフォーム向けにビルドし、チェックサムを添えて GitHub Release へ添付 |
 
 ツールチェーンと GPUI のビルド依存 (Linux の Wayland/X11/Vulkan 一式、macOS の
@@ -151,6 +151,10 @@ SHA256SUMS
 `workflow_dispatch` で流すこと。手動実行は必ず**下書き**として作られるので、
 公開せずにパイプラインの成否だけ確かめられる。
 
-`cargo fmt --check` と `cargo clippy -D warnings` は CI に入れていない。
-既存コードに非準拠が 95 箇所・clippy の指摘が 25 件あり、入れた時点で赤になるため。
-門番にするなら、先に整形と指摘の解消だけを行うコミットを分けて入れること。
+`cargo fmt --check` と `cargo clippy -D warnings` は CI の門番に入っている。
+以前は既存コードに指摘が残っていて入れた瞬間に赤になるため外していたが、
+v0.1.0 に向けて整形だけのコミットと lint 解消だけのコミットを先に入れて解消した。
+
+`rust-version` も同様に検査する。以前は「依存クレートが通るか確かめられていない」
+という理由で検査しておらず、その結果 `1.85` と書いてあるのに実際には
+`cargo +1.85 check` が通らない状態が公称され続けていた。値を書くなら確かめる。

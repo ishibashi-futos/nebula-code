@@ -5,6 +5,10 @@ description: >
   片方だけ直したときに「CI は通るのにリリースだけ落ちる」が起きるので 1 箇所にまとめる。
 
 inputs:
+  toolchain:
+    description: 入れるツールチェーン (既定は stable。最低要求バージョンの検査だけ版を指定する)
+    required: false
+    default: stable
   targets:
     description: 追加で入れる rustup ターゲット (クロスビルド用。空なら host のみ)
     required: false
@@ -17,9 +21,14 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    # `components` を明示するのは、この action が minimal profile で入れるため。
+    # ランナーに rustfmt / clippy が最初から入っていることに頼ると、
+    # イメージが変わった日に CI の門番だけが静かに消える。
+    - uses: dtolnay/rust-toolchain@master
       with:
+        toolchain: ${{ inputs.toolchain }}
         targets: ${{ inputs.targets }}
+        components: rustfmt, clippy
 
     - name: Linux — GPUI のビルド依存を入れる
       if: runner.os == 'Linux'
