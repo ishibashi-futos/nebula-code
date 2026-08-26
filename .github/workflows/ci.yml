@@ -54,5 +54,9 @@ jobs:
       - name: ビルド
         run: cargo build --workspace --all-targets --locked
 
+      # --no-fail-fast を付けるのは、テストの実行単位 (クレート・結合テスト) が
+      # 複数あり、既定では最初に落ちた単位で打ち切られるため。1 つの失敗で
+      # 後続の結合テストが走らないと、直しては待つのを繰り返すことになる。
+      # Windows のジョブは 1 周 10 分以上かかるので差が大きい。
       - name: テスト
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
