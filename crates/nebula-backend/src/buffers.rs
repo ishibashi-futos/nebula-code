@@ -316,8 +316,13 @@ pub fn normalize(path: &Path) -> PathBuf {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
+        // カレントディレクトリが取得できない (削除された作業ディレクトリなど) 稀な
+        // 異常系のフォールバック。呼び出し元はこの関数にエラーを返させる作りには
+        // なっておらず、影響も小さいので `Result` 化はしない。`/` 決め打ちは Unix
+        // 前提で Windows では意味を持たないため、OS を問わず必ず存在する一時
+        // ディレクトリを代わりの基点にする。
         std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("/"))
+            .unwrap_or_else(|_| std::env::temp_dir())
             .join(path)
     };
     for component in absolute.components() {
@@ -338,10 +343,18 @@ mod tests {
 
     #[test]
     fn パス正規化が相対要素を畳む() {
-        assert_eq!(
-            normalize(Path::new("/a/b/../c/./d")),
-            PathBuf::from("/a/c/d")
-        );
+        // Windows の絶対パスはドライブ文字を含んで初めて `is_absolute()` が
+        // 真になる (`/a/b` はルートを持つだけで絶対パス扱いされない)。ドライブ文字
+        // なしのまま `/a/b/../c/./d` を渡すと `is_absolute()` が偽になり、
+        // 実行環境のカレントディレクトリを基点に結合される別の枝へ入ってしまい、
+        // 期待値と一致しなくなる。相対要素を畳む、というこのテストの意図はそのまま
+        // に、OS ごとに実際に絶対パスとみなされる表記へ切り替える。
+        let (input, expected) = if cfg!(windows) {
+            (r"C:\a\b\..\c\.\d", r"C:\a\c\d")
+        } else {
+            ("/a/b/../c/./d", "/a/c/d")
+        };
+        assert_eq!(normalize(Path::new(input)), PathBuf::from(expected));
     }
 
     #[test]

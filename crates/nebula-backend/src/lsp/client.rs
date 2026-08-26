@@ -265,11 +265,35 @@ mod tests {
         assert_eq!(error.kind, ProtocolErrorKind::NotFound);
     }
 
+    /// テストが起動するダミー言語サーバーの種類。OS ごとに実行ファイル名も文法も
+    /// 違うため、分岐は `dummy_program` の 1 箇所へ集める。
+    enum DummyKind {
+        /// 標準入力を読み続けるだけで JSON-RPC の応答は返さない (`cat` 相当)。
+        Silent,
+        /// 何もせずすぐ成功して終わる (`true` 相当)。
+        ExitImmediately,
+    }
+
+    fn dummy_program(kind: DummyKind) -> (&'static str, &'static [&'static str]) {
+        match (kind, cfg!(windows)) {
+            // `more` は標準入力から読み続けてページングするだけで、こちらから何も
+            // 書き込まなければ何も応答を返さない。`cat` の代わりとして十分。
+            (DummyKind::Silent, true) => ("cmd", &["/C", "more"]),
+            (DummyKind::Silent, false) => ("cat", &[]),
+            (DummyKind::ExitImmediately, true) => ("cmd", &["/C", "exit", "0"]),
+            (DummyKind::ExitImmediately, false) => ("true", &[]),
+        }
+    }
+
     #[tokio::test]
     async fn 応答しない相手への要求はタイムアウトする() {
-        // `cat` は送ったフレームをそのまま返すだけで、JSON-RPC の応答は返さない。
-        // 待ち続けないことを確かめる。
-        let (client, _incoming) = Client::spawn("cat", &[], Path::new("/")).expect("cat の起動");
+        // ダミーサーバーは送ったフレームをそのまま返す/何も返さないだけで、
+        // JSON-RPC の応答は返さない。待ち続けないことを確かめる。
+        let (program, args) = dummy_program(DummyKind::Silent);
+        // `/` は Windows では起動先を特定できないおそれがあるため、OS を問わず
+        // 必ず存在する一時ディレクトリを作業ディレクトリにする。
+        let (client, _incoming) = Client::spawn(program, args, &std::env::temp_dir())
+            .expect("ダミーサーバーの起動");
         let error = client
             .request("textDocument/hover", Value::Null, Duration::from_millis(200))
             .await
@@ -281,8 +305,10 @@ mod tests {
 
     #[tokio::test]
     async fn 相手が終了すると待機中の要求は即座に失敗する() {
-        // `true` は何も出力せずすぐ終わる。標準出力が閉じた時点で失敗すべき。
-        let (client, _incoming) = Client::spawn("true", &[], Path::new("/")).expect("true の起動");
+        // ダミーサーバーは何も出力せずすぐ終わる。標準出力が閉じた時点で失敗すべき。
+        let (program, args) = dummy_program(DummyKind::ExitImmediately);
+        let (client, _incoming) = Client::spawn(program, args, &std::env::temp_dir())
+            .expect("ダミーサーバーの起動");
         let error = client
             // タイムアウトを長く取っても、待たされずに失敗する。
             .request("initialize", Value::Null, Duration::from_secs(30))

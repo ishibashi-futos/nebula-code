@@ -647,15 +647,33 @@ mod tests {
         assert_eq!(error.kind, nebula_protocol::ProtocolErrorKind::NotFound);
     }
 
+    /// `wire_with_dummy_child` が使う「相手には何も喋らないダミー子プロセス」の
+    /// 起動コマンドを OS ごとに選ぶ。標準入力を読み続けて自分からは何も書き出さず、
+    /// すぐには終了しないプロセスであればよい (実際の応答はテスト側が `resolve` で
+    /// 直接作るため、出力内容そのものは使わない)。
+    /// - Unix: `cat`。EOF が来るまで読み続けてブロックする。
+    /// - Windows: `cmd /C more`。`more` は標準入力から読み続けてページングするため
+    ///   同じ役に立つ。`cmd.exe` 経由なので子の子プロセスになるが、パイプの書き込み
+    ///   端を閉じれば `more` 側は EOF を受けて自然に終了する。
+    fn dummy_child_command() -> Command {
+        if cfg!(windows) {
+            let mut cmd = Command::new("cmd");
+            cmd.args(["/C", "more"]);
+            cmd
+        } else {
+            Command::new("cat")
+        }
+    }
+
     /// 応答の待ち合わせだけを試すための `Wire`。
-    /// 相手には何も喋らない `cat` を置き、応答は試験側から `resolve` で流し込む。
+    /// 相手には何も喋らないダミー子プロセスを置き、応答は試験側から `resolve` で流し込む。
     async fn wire_with_dummy_child() -> (Arc<Wire>, Child) {
-        let mut child = Command::new("cat")
+        let mut child = dummy_child_command()
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .expect("cat の起動");
+            .expect("ダミー子プロセスの起動");
         let stdin = child.stdin.take().expect("stdin を piped で起動した");
         let wire = Arc::new(Wire {
             stdin: AsyncMutex::new(stdin),

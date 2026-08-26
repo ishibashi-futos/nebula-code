@@ -331,6 +331,17 @@ mod tests {
         }
     }
 
+    /// PTY で実際に起動して確かめるテスト用に、OS ごとの同等コマンドを選ぶ。
+    ///
+    /// Unix と Windows でシェルの実行ファイル名も文法も違うため、呼び出し側の
+    /// テストが `#[cfg(...)]` を個別に持たずに済むよう、この 1 箇所へ分岐を集める。
+    /// `unix` 側は Unix のシェル文法の一行スクリプト、`windows` 側は `cmd.exe /C`
+    /// に渡す等価なコマンド文字列を渡す。
+    fn shell_spec(unix: (&str, &[&str]), windows: (&str, &[&str])) -> TerminalSpec {
+        let (shell, args) = if cfg!(windows) { windows } else { unix };
+        spec(shell, args)
+    }
+
     #[test]
     fn 明示指定が無ければログインシェルとして起動する() {
         let explicit = build_command(&spec("/bin/sh", &["-c", "true"]));
@@ -400,7 +411,12 @@ mod tests {
         let (events, mut rx) = broadcast::channel(256);
         let service = TerminalService::new(events);
         let id = service
-            .create(spec("/bin/echo", &["hello"]))
+            .create(shell_spec(
+                ("/bin/echo", &["hello"]),
+                // cmd.exe に実行ファイルとしての `echo` は無く、内蔵コマンドなので
+                // `/C echo hello` の形で渡す。
+                ("cmd", &["/C", "echo hello"]),
+            ))
             .expect("PTY を開ける");
 
         assert_eq!(wait_for_output(&mut rx, id, "hello").await, Some(0));
@@ -412,11 +428,23 @@ mod tests {
         let (events, mut rx) = broadcast::channel(256);
         let service = TerminalService::new(events);
         let id = service
-            .create(spec("/bin/sh", &["-c", "read line; echo got=$line"]))
+            .create(shell_spec(
+                ("/bin/sh", &["-c", "read line; echo got=$line"]),
+                // `set /p` で 1 行読み、`got=` を付けて返す。`%var%` はコマンドライン
+                // 全体のパース時に (= `set /p` の実行前に) 展開されてしまい空のまま
+                // になるため、`/V:ON` で遅延展開を有効にして `!var!` を使う。
+                (
+                    "cmd",
+                    &["/V:ON", "/C", "set /p line=& echo got=!line!"],
+                ),
+            ))
             .expect("PTY を開ける");
 
         service.resize(id, 12, 30).expect("リサイズできる");
-        service.input(id, b"nebula\n").expect("書き込める");
+        // Windows の PTY (ConPTY) の行入力は Enter = CR の到着で確定する。LF 単独では
+        // 読み終えず待ち続けてタイムアウトするため、CRLF で送る。Unix 側は PTY の
+        // 行規律 (ICRNL) が CR を NL に変換するので、この変更で挙動は変わらない。
+        service.input(id, b"nebula\r\n").expect("書き込める");
 
         assert_eq!(wait_for_output(&mut rx, id, "got=nebula").await, Some(0));
         service.shutdown();

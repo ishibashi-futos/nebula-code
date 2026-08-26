@@ -153,12 +153,13 @@ impl Drop for Client {
     }
 }
 
+/// `tool` が `PATH` 上にあるかどうか。
+///
+/// 自前で走査せず `nebula_backend::tools::find_executable` に委ねる。Windows では
+/// `git` のような拡張子なしの指定を `PATHEXT` (`git.exe` など) まで展開しないと
+/// 見つからず、その展開ロジックを二重実装しないため。
 fn has(tool: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|path| {
-            std::env::split_paths(&path).any(|dir| dir.join(tool).is_file())
-        })
-        .unwrap_or(false)
+    tools::find_executable(tool).is_some()
 }
 
 #[test]
@@ -327,17 +328,40 @@ fn git_の状態とブランチが取得できる() {
     }
 }
 
+/// 「`NEBULA_OK` を出力してから少し待って終わる」シェル起動パラメータ。
+///
+/// Unix と Windows でシェルの実行ファイルも文法も違うため、分岐をこの 1 箇所へ
+/// まとめる。`timeout` コマンドは標準入力がコンソールでないと使えないことがあるため
+/// 避け、入力の有無に依存しない `ping` で待つ。
+fn ok_then_wait_shell() -> (String, Vec<String>) {
+    if cfg!(windows) {
+        (
+            "cmd".into(),
+            vec![
+                "/C".into(),
+                "echo NEBULA_OK & ping -n 2 127.0.0.1 > nul".into(),
+            ],
+        )
+    } else {
+        (
+            "/bin/sh".into(),
+            vec!["-c".into(), "printf 'NEBULA_OK'; sleep 1".into()],
+        )
+    }
+}
+
 #[test]
 fn ターミナルが起動して出力を返す() {
     let mut c = Client::start("term");
     let root = c.workdir.clone();
     let workspace = c.open_workspace(root.clone());
 
+    let (shell, args) = ok_then_wait_shell();
     let terminal = match c.request(Request::TerminalCreate {
         spec: TerminalSpec {
             workspace,
-            shell: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "printf 'NEBULA_OK'; sleep 1".into()],
+            shell: Some(shell),
+            args,
             cwd: Some(root),
             env: Vec::new(),
             rows: 24,
