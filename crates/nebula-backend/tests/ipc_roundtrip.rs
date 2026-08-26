@@ -74,7 +74,9 @@ impl Harness {
     fn request(&mut self, request: Request) -> Result<Response, String> {
         let id = RequestId::next();
         let frame = encode_frame(&ClientMessage::Request { id, request }).expect("符号化");
-        self.stream.write_all(&frame).expect("送信");
+        if let Err(e) = self.stream.write_all(&frame) {
+            return Err(format!("送信できない: {e}"));
+        }
 
         let mut chunk = vec![0u8; 64 * 1024];
         loop {
@@ -88,8 +90,17 @@ impl Harness {
                     return result.map_err(|e| e.to_string());
                 }
             }
-            let read = self.stream.read(&mut chunk).expect("受信");
-            assert!(read > 0, "接続が切れた");
+            // 通信の失敗は panic ではなく Err で返す。Drop から
+            // `let _ = self.request(Request::Shutdown)` と best-effort で呼ぶので、
+            // ここで panic すると後始末そのものがテストを失敗させてしまう
+            // (`let _ =` は panic を飲み込めない)。
+            let read = match self.stream.read(&mut chunk) {
+                Ok(read) => read,
+                Err(e) => return Err(format!("受信できない: {e}")),
+            };
+            if read == 0 {
+                return Err("接続が切れた".to_string());
+            }
             self.decoder.feed(&chunk[..read]);
         }
     }
@@ -110,6 +121,10 @@ impl Harness {
 
 impl Drop for Harness {
     fn drop(&mut self) {
+        // 応答 (Ack) は届かないことがある。バックエンドは Ack を送信待ち行列へ
+        // 載せた直後に停止へ入るので、書き出される前に接続が閉じうるため
+        // (crates/nebula-backend/src/ipc.rs の Shutdown 分岐)。
+        // 停止させることだけが目的なので、結果は見ない。
         let _ = self.request(Request::Shutdown);
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_file(self.socket.with_extension("lock"));

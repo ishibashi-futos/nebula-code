@@ -194,6 +194,10 @@ async fn handle_client_message(
         }
         ClientMessage::Request { id, request } => {
             if matches!(request, Request::Shutdown) {
+                // この Ack は best-effort。送信待ち行列へ載せた直後に停止へ入るので、
+                // 実際に書き出される前に接続が閉じることがある。
+                // 停止を待ちたい側は Ack ではなくソケットファイルが消えるのを見ること
+                // (GUI 側 `replace_backend` がそうしている)。
                 let _ = out.send(ServerMessage::Response {
                     id,
                     result: Ok(nebula_protocol::Response::Ack),

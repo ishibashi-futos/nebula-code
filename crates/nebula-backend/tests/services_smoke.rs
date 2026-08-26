@@ -70,7 +70,9 @@ impl Client {
     fn request(&mut self, request: Request) -> Result<Response, String> {
         let id = RequestId::next();
         let frame = encode_frame(&ClientMessage::Request { id, request }).expect("符号化");
-        self.stream.write_all(&frame).expect("送信");
+        if let Err(e) = self.stream.write_all(&frame) {
+            return Err(format!("送信できない: {e}"));
+        }
         let mut chunk = vec![0u8; 64 * 1024];
         loop {
             while let Ok(Some(message)) = self.decoder.next_message::<ServerMessage>() {
@@ -83,8 +85,16 @@ impl Client {
                     ServerMessage::Event(event) => self.events.push(event),
                 }
             }
-            let read = self.stream.read(&mut chunk).expect("受信");
-            assert!(read > 0, "接続が切れた");
+            // ipc_roundtrip.rs と同じ理由で panic させない。Drop から
+            // best-effort で呼ぶため、ここで panic すると後始末がテストを
+            // 失敗させてしまう (`let _ =` は panic を飲み込めない)。
+            let read = match self.stream.read(&mut chunk) {
+                Ok(read) => read,
+                Err(e) => return Err(format!("受信できない: {e}")),
+            };
+            if read == 0 {
+                return Err("接続が切れた".to_string());
+            }
             self.decoder.feed(&chunk[..read]);
         }
     }
@@ -134,6 +144,7 @@ impl Client {
 
 impl Drop for Client {
     fn drop(&mut self) {
+        // Ack は届かないことがある (ipc.rs の Shutdown 分岐を参照)。結果は見ない。
         let _ = self.request(Request::Shutdown);
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.workdir);
