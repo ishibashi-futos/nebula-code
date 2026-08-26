@@ -9,6 +9,16 @@
 //! `nebula_protocol::transport` が両プラットフォームぶん面倒を見る。
 //! ここの `platform` サブモジュールに残るのは、GUI にしか要らない
 //! 「古いバックエンドをどう終わらせ、どう終了を見届けるか」だけ。
+//!
+//! バックエンドが 1 つしか存在しないことは、この GUI 側では検査しない。
+//! バックエンドの `bind`/`first_pipe_instance` そのものが排他の実体で
+//! (ロックファイルは使わない。「ロックはあるが接続できない」の判定が勝者の
+//! bind 直前にも成立してしまい、二重起動を招くため)、`connect_or_spawn` は
+//! 単に繋ぐか起動するかを気にせず試すだけでよい。ただし繋いだ相手が
+//! 「同じソケット名に居座る古いビルド」である可能性は残るため、
+//! [`BackendClient::connect_blocking`] がハンドシェイクの実行ファイル情報
+//! (`ExecutableIdentity`) を突き合わせ、一致しなければ `replace_backend` で
+//! 終了させて起動し直す。
 
 #[cfg_attr(windows, path = "ipc_client/windows.rs")]
 #[cfg_attr(unix, path = "ipc_client/unix.rs")]

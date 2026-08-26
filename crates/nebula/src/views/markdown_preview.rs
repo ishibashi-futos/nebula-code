@@ -7,7 +7,7 @@
 //! Markdown → 描くべき要素の並びへの変換 (tree-sitter を使う `parse_preview`) は
 //! バックエンドで行う (`crates/nebula-backend/src/buffers.rs` の `markdown_preview`
 //! ハンドラ)。GUI プロセスでは tree-sitter を一切動かさない
-//! (`ARCHITECTURE.md` の「構文解析は GUI では走らせない」方針)。ここでは、
+//! (構文解析は GUI では走らせない、という設計方針)。ここでは、
 //! 版数のズレを防ぎながらバックエンドへ要求を送ることと、結果を `div()` の並びへ
 //! 描くことに専念する。`editor_element.rs` が使っている低レベルな
 //! `Element`/`shape_line` 機構は使わない (あれは巨大バッファを高速に描くための

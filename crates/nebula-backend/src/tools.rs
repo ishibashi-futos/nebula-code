@@ -6,6 +6,11 @@
 //! で切り離して走らせ、完了したら `Event::ToolsDetected` で結果を届ける
 //! (`BackendState::apply_detected_tools`)。GUI からの最初の接続を検出の遅さで
 //! 待たせないため。
+//!
+//! 自前でライブラリを抱え込まず、見つかった実行ファイルを CLI として叩くのは、
+//! (1) バイナリサイズとビルド時間を抑えられ、(2) 利用者が普段使っているものと
+//! 同じ挙動・同じ設定を通せるため。git と ripgrep はどちらも機械可読な出力形式
+//! (porcelain / `--json`) を持つので、CLI 越しでも解析は安定する。
 
 use nebula_protocol::DetectedTools;
 use std::path::PathBuf;
