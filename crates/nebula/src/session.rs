@@ -354,11 +354,29 @@ mod tests {
         assert!(xdg.ends_with("nebula"));
     }
 
+    /// 保存できないときに黙って成功したことにしていないか。
+    ///
+    /// 「作れない場所」の作り方に**権限を使わない**。以前はルート直下
+    /// (`/nebula-no-such-root/…`) を書けない場所として使っていたが、これは
+    /// 「その利用者がルートに書けない」ことに寄りかかった判定で、
+    /// 実際に 2 通りに崩れる。root で走らせれば Unix でも作れてしまうし、
+    /// Windows では `/…` がカレントドライブの直下を指すので CI の利用者が
+    /// 普通に作れてしまう (実際に Windows の CI がここで落ちた)。
+    ///
+    /// 代わりに「親がディレクトリではなくファイル」という状況を作る。
+    /// `create_dir_all` はどの OS でも、権限に関係なく必ず失敗する。
     #[test]
     fn 書き込めない場所への保存は失敗を返す() {
+        let blocker = std::env::temp_dir().join(format!(
+            "nebula-session-blocker-{}",
+            std::process::id()
+        ));
+        std::fs::write(&blocker, "これはディレクトリではない").unwrap();
+
         let session = Session::default();
-        // 存在しない上に作れないルート直下。
-        let result = session.try_save_to(std::path::Path::new("/nebula-no-such-root/session.json"));
+        let result = session.try_save_to(&blocker.join("session.json"));
+
+        let _ = std::fs::remove_file(&blocker);
         assert!(result.is_err(), "失敗が握りつぶされている");
     }
 

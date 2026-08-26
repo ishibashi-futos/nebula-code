@@ -338,6 +338,11 @@ fn ok_then_wait_shell() -> (String, Vec<String>) {
         (
             "cmd".into(),
             vec![
+                // `/S` を付けるのは、cmd の「先頭と末尾の引用符を外す」規則が
+                // `&` や `>` を含む文字列では働かないため。portable-pty は空白を
+                // 含む引数を引用符で囲むので、それが外されないまま「そんな
+                // コマンドは無い」で落ちる。`/S` はその規則を無条件にする。
+                "/S".into(),
                 "/C".into(),
                 "echo NEBULA_OK & ping -n 2 127.0.0.1 > nul".into(),
             ],
