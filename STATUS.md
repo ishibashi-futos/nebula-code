@@ -191,6 +191,6 @@ worktree ごとに `CARGO_TARGET_DIR` を分けるか、
 | リリース CI の実地確認 | `release.yml` は初回タグ push まで未検証。特に Linux 向けの apt 依存一覧は gpui のターゲット依存から逆算した推定 |
 | Markdown プレビューの対応範囲 | 見出し・段落・リスト・チェックリスト・コードブロック・引用・水平線のみ。インライン装飾 (`**太字**`・リンク等)、表、HTML ブロック、4 字下げコードブロックは未対応 |
 | Intel Mac 向けリリース | アセット名は解決できるが CI のビルド行列に無いため、実際には配布物が無い |
-| Windows の実機確認 | ビルド・IPC・テストは CI (windows-latest) が通す。**GUI そのものは未検証** — gpui のウィンドウ生成・DirectX 描画・IME・日本語入力は誰も実機で動かしていない。名前付きパイプ経路は結合テストが通しで確認しているが、これは画面の要らない範囲に限る |
+| Windows の実機確認 | ビルド・テストは CI (windows-latest) が全て緑。名前付きパイプ経路は結合テスト (`ipc_roundtrip` 8 件) が実機で通しで動いており、重畳 I/O のクライアントもそこで検査されている。**GUI そのものは未検証** — gpui のウィンドウ生成・DirectX 描画・IME・日本語入力は誰も実機で動かしていない。CI が保証するのは画面の要らない範囲に限る |
 | Windows のリリース確認 | `release.yml` の Windows 行と PowerShell の起動確認ステップは、`workflow_dispatch` を手で流すまで一度も実行されない (ブランチへの push では走らない)。`fxc.exe` による HLSL シェーダのコンパイル (release ビルドでのみ走る) もそこが初回 |
-| Windows のショートカット実機確認 | 打鍵の解決と表記はテストで固めてあるが (`secondary` の解決結果・両プラットフォームの表記・衝突検査)、実際に押した感触は未確認。特に端末の Ctrl+Shift+C / Ctrl+Shift+V と、ConPTY へ送る制御文字の通り方 |
+| Windows のショートカット実機確認 | 打鍵の解決と表記は Windows 上のテストが通っている (`secondary` が Ctrl へ解決されること・両プラットフォームの表記・衝突検査)。ただし**実際に押した感触は未確認**。特に端末の Ctrl+Shift+C / Ctrl+Shift+V と、ConPTY へ送る制御文字の通り方 |
