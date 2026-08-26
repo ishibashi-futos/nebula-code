@@ -91,13 +91,14 @@ impl GitService {
 
     pub async fn blame(&self, repo: &Path, path: &Path) -> Result<Vec<BlameLine>, ProtocolError> {
         let relative = relative(repo, path)?;
+        let pathspec = to_pathspec(&relative);
         let output = run(
             repo,
             [
                 OsStr::new("blame"),
                 OsStr::new("--line-porcelain"),
                 OsStr::new("--"),
-                relative.as_os_str(),
+                pathspec.as_os_str(),
             ],
         )
         .await?;
@@ -203,7 +204,7 @@ impl GitService {
         }
         if let Some(path) = path {
             args.push(OsString::from("--"));
-            args.push(relative(repo, path)?.into_os_string());
+            args.push(to_pathspec(&relative(repo, path)?));
         }
         let output = run(repo, args).await?;
         Ok(refs::parse_log(&String::from_utf8_lossy(&output)))
@@ -267,7 +268,7 @@ where
 async fn show_at_head(repo: &Path, relative: &Path) -> Result<String, ProtocolError> {
     // 非 UTF-8 のファイル名でも壊さないよう、文字列連結ではなく OsString で組む。
     let mut spec = OsString::from("HEAD:");
-    spec.push(relative.as_os_str());
+    spec.push(to_pathspec(relative));
     let output = run(repo, [OsStr::new("show"), spec.as_os_str()]).await?;
     String::from_utf8(output)
         .map_err(|_| ProtocolError::invalid("UTF-8 として読めないファイルです"))
@@ -317,7 +318,12 @@ async fn git_dir(repo: &Path) -> PathBuf {
 /// エラーが分かりにくく、`HEAD:<path>` のように相対でしか書けない指定もあるため
 /// 入口で揃える。
 fn relative(repo: &Path, path: &Path) -> Result<PathBuf, ProtocolError> {
-    if path.is_relative() {
+    // `is_relative()` ではなく `has_root()` の否定で判定する。Windows では
+    // ドライブ文字を持たない `/etc/hosts` のようなパスが `is_absolute()` では
+    // false (= 相対) 扱いになり、下の封じ込め判定を素通りして git まで届いてしまう
+    // ため ( `is_relative()` は `is_absolute()` の否定でしかない)。ルートを持つ
+    // 時点でリポジトリ相対のつもりではあり得ないので、`has_root()` で弾く。
+    if !path.has_root() {
         return Ok(path.to_path_buf());
     }
     let repo = resolve(repo);
@@ -346,8 +352,48 @@ fn relatives(repo: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, ProtocolErr
 fn with_paths(leading: &[&str], paths: &[PathBuf]) -> Vec<OsString> {
     let mut args: Vec<OsString> = leading.iter().map(OsString::from).collect();
     args.push(OsString::from("--"));
-    args.extend(paths.iter().map(|path| path.clone().into_os_string()));
+    args.extend(paths.iter().map(|path| to_pathspec(path)));
     args
+}
+
+/// リポジトリ相対パスを git に渡す pathspec (常にスラッシュ区切り) に変換する。
+///
+/// git はパス区切りとして `/` しか解釈せず、`\` は区切りではなく 1 文字として扱う。
+/// `relative()` が返す `PathBuf` は `resolve()` の canonicalize を経由しており、
+/// Windows では区切りがすべて OS 標準の `\` に揃ってしまう (元の呼び出し元が
+/// `/` 区切りで渡していても関係ない)。素通しで `OsStr` 化すると
+/// `git show HEAD:サブ\a.txt` のように壊れた指定になるため、git に渡す直前に
+/// 必ずここを通す。
+fn to_pathspec(path: &Path) -> OsString {
+    // 置き換えは Windows でだけ行う。`\` が区切りだと言い切れるのはそこだけで、
+    // Unix ではファイル名に literal な `\` を含められる。無条件に変換すると
+    // `a\b` という 1 つのファイルを `a/b` という 2 階層の指定に化けさせてしまう。
+    to_pathspec_on(path, cfg!(windows))
+}
+
+/// `windows` が真なら `\` を区切りとみなして `/` へ均す。
+///
+/// 実行中の OS ではなく引数で切り替えるのは、macOS 上の `cargo test` でも
+/// Windows 側の挙動を検証できるようにするため。`Path::components()` で分解し直さず
+/// 生バイト列を直接書き換えるのも同じ理由で、`components()` の区切り判定は
+/// 実行中の OS に固定されており macOS からは Windows 形式のパスを扱えない。
+/// `OsStr` のエンコーディングは ASCII を常にそのまま表す
+/// ([`OsStr::as_encoded_bytes`] の契約) ので、`\` (0x5C) を `/` (0x2F) へ
+/// 置き換えるだけなら非 UTF-8 なファイル名も壊さない。
+fn to_pathspec_on(path: &Path, windows: bool) -> OsString {
+    if !windows {
+        return path.as_os_str().to_os_string();
+    }
+    let bytes: Vec<u8> = path
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .map(|&b| if b == b'\\' { b'/' } else { b })
+        .collect();
+    // SAFETY: 書き換えたのは ASCII の `\` だけで、`as_encoded_bytes` が保証する
+    // 「ASCII バイトは常に自分自身を表す」性質は保たれている。よって `bytes` は
+    // 引き続き有効なエンコード列であり、`from_encoded_bytes_unchecked` の要件を満たす。
+    unsafe { OsString::from_encoded_bytes_unchecked(bytes) }
 }
 
 /// 存在する最も深い祖先まで遡ってシンボリックリンクを解決する。
@@ -388,6 +434,12 @@ mod tests {
         git(&dir, &["config", "user.name", "テスト"]);
         git(&dir, &["config", "user.email", "test@example.com"]);
         git(&dir, &["config", "commit.gpgsign", "false"]);
+        // Windows の git は既定で autocrlf 相当の動作をし、チェックアウト時に LF を
+        // CRLF へ変換する。テストの意図は改行コードの検証ではなく内容の一致なので、
+        // テスト用リポジトリではこの変換を止める。本番の `nebula` 側で autocrlf を
+        // 無効化しているわけではない (Windows で CRLF のファイルを扱えること自体は
+        // `nebula-core` の `detect_line_ending` が別途担っている)。
+        git(&dir, &["config", "core.autocrlf", "false"]);
         dir
     }
 
@@ -770,5 +822,53 @@ mod tests {
         assert_eq!(error.kind, nebula_protocol::ProtocolErrorKind::ExternalTool);
         assert!(!error.message.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // `to_pathspec_on` は純粋関数なので、実行中の OS に関わらず両方の作法を
+    // ここで検証できる。実際に Windows 上で `relative()` が返す値が
+    // バックスラッシュ区切りになることは CI 上の実行でしか確かめられない。
+
+    #[test]
+    fn パススペック変換でバックスラッシュがスラッシュになる() {
+        assert_eq!(
+            to_pathspec_on(Path::new("サブ\\a.txt"), true),
+            OsString::from("サブ/a.txt")
+        );
+    }
+
+    #[test]
+    fn パススペック変換で混在した区切りも揃う() {
+        // resolve() の canonicalize とパスの再結合を経ると、Windows では
+        // 元がスラッシュ区切りでも一部だけバックスラッシュに変わることがある。
+        assert_eq!(
+            to_pathspec_on(Path::new("サブ\\奥/a.txt"), true),
+            OsString::from("サブ/奥/a.txt")
+        );
+    }
+
+    #[test]
+    fn パススペック変換ですでにスラッシュ区切りなら変わらない() {
+        assert_eq!(
+            to_pathspec_on(Path::new("サブ/a.txt"), true),
+            OsString::from("サブ/a.txt")
+        );
+    }
+
+    #[test]
+    fn パススペック変換で区切りが無ければそのまま() {
+        assert_eq!(
+            to_pathspec_on(Path::new("a.txt"), true),
+            OsString::from("a.txt")
+        );
+    }
+
+    /// Unix ではファイル名に literal な `\` を含められる。ここまで変換すると
+    /// 1 つのファイルが 2 階層の指定に化けて、別のファイルを指してしまう。
+    #[test]
+    fn unix_ではバックスラッシュをファイル名の一部として残す() {
+        assert_eq!(
+            to_pathspec_on(Path::new("a\\b.txt"), false),
+            OsString::from("a\\b.txt")
+        );
     }
 }
