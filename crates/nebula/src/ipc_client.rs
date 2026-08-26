@@ -127,11 +127,6 @@ impl BackendClient {
             .unwrap_or_else(|_| Err(ProtocolError::io("応答を受け取れませんでした")))
     }
 
-    /// 応答を必要としない取り消し要求。
-    pub fn cancel(&self, id: RequestId) {
-        let _ = self.outgoing.try_send(ClientMessage::Cancel { id });
-    }
-
     /// バックエンドからのイベント列。
     pub fn events(&self) -> Receiver<Event> {
         self.events.clone()

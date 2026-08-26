@@ -1880,18 +1880,16 @@ impl EntityInputHandler for EditorView {
 // 変換をこの 3 関数に閉じ込める。
 
 fn char_range_to_utf16(text: &str, range: Range<usize>) -> Range<usize> {
-    let mut char_index = 0usize;
     let mut utf16_index = 0usize;
     let mut start = None;
     let mut end = None;
-    for c in text.chars() {
+    for (char_index, c) in text.chars().enumerate() {
         if char_index == range.start {
             start = Some(utf16_index);
         }
         if char_index == range.end {
             end = Some(utf16_index);
         }
-        char_index += 1;
         utf16_index += c.len_utf16();
     }
     Range {

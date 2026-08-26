@@ -51,16 +51,12 @@ pub struct Theme {
 
     // -- エディタ --
     pub editor_bg: Hsla,
-    pub editor_gutter: Hsla,
     pub line_number: Hsla,
     pub line_number_active: Hsla,
     pub cursor: Hsla,
     pub selection: Hsla,
-    /// 選択していないときの同一語ハイライト。
-    pub selection_match: Hsla,
     pub current_line: Hsla,
     pub indent_guide: Hsla,
-    pub indent_guide_active: Hsla,
     pub bracket_match: Hsla,
 
     // -- git --
@@ -204,15 +200,12 @@ impl Theme {
             success: lime,
 
             editor_bg: rgb(0x0A0C16).into(),
-            editor_gutter: rgb(0x0A0C16).into(),
             line_number: rgb(0x39406B).into(),
             line_number_active: cyan,
             cursor: cyan,
             selection: rgba(0x22E6FF2E).into(),
-            selection_match: rgba(0x9B6BFF2E).into(),
             current_line: rgba(0xFFFFFF08).into(),
             indent_guide: rgba(0x2A335866).into(),
-            indent_guide_active: rgba(0x22E6FF55).into(),
             bracket_match: rgba(0xFF2FD055).into(),
 
             git_added: lime,

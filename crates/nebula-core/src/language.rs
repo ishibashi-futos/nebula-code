@@ -26,8 +26,6 @@ pub struct Language {
     /// 文法を返す関数。定数畳み込みできないので関数ポインタで持つ。
     grammar: fn() -> tree_sitter::Language,
     highlights_query: &'static str,
-    /// 埋め込み言語 (HTML 内の JS 等) のクエリ。未対応の言語は `None`。
-    injections_query: Option<&'static str>,
 }
 
 impl Language {
@@ -80,7 +78,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_rust::LANGUAGE.into(),
         highlights_query: tree_sitter_rust::HIGHLIGHTS_QUERY,
-        injections_query: Some(tree_sitter_rust::INJECTIONS_QUERY),
     },
     Language {
         id: "python",
@@ -93,7 +90,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_python::LANGUAGE.into(),
         highlights_query: tree_sitter_python::HIGHLIGHTS_QUERY,
-        injections_query: None,
     },
     Language {
         id: "javascript",
@@ -106,7 +102,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_javascript::LANGUAGE.into(),
         highlights_query: tree_sitter_javascript::HIGHLIGHT_QUERY,
-        injections_query: Some(tree_sitter_javascript::INJECTIONS_QUERY),
     },
     Language {
         id: "typescript",
@@ -119,7 +114,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         highlights_query: tree_sitter_typescript::HIGHLIGHTS_QUERY,
-        injections_query: None,
     },
     Language {
         id: "tsx",
@@ -132,7 +126,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_typescript::LANGUAGE_TSX.into(),
         highlights_query: tree_sitter_typescript::HIGHLIGHTS_QUERY,
-        injections_query: None,
     },
     Language {
         id: "json",
@@ -145,7 +138,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_json::LANGUAGE.into(),
         highlights_query: tree_sitter_json::HIGHLIGHTS_QUERY,
-        injections_query: None,
     },
     Language {
         id: "toml",
@@ -158,7 +150,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_toml_ng::LANGUAGE.into(),
         highlights_query: tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
-        injections_query: None,
     },
     Language {
         id: "markdown",
@@ -171,7 +162,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_md::LANGUAGE.into(),
         highlights_query: tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
-        injections_query: Some(tree_sitter_md::INJECTION_QUERY_BLOCK),
     },
     Language {
         id: "go",
@@ -184,7 +174,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: true,
         grammar: || tree_sitter_go::LANGUAGE.into(),
         highlights_query: tree_sitter_go::HIGHLIGHTS_QUERY,
-        injections_query: None,
     },
     Language {
         id: "html",
@@ -197,7 +186,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_html::LANGUAGE.into(),
         highlights_query: tree_sitter_html::HIGHLIGHTS_QUERY,
-        injections_query: Some(tree_sitter_html::INJECTIONS_QUERY),
     },
     Language {
         id: "css",
@@ -210,7 +198,6 @@ pub static LANGUAGES: &[Language] = &[
         use_tabs: false,
         grammar: || tree_sitter_css::LANGUAGE.into(),
         highlights_query: tree_sitter_css::HIGHLIGHTS_QUERY,
-        injections_query: None,
     },
 ];
 

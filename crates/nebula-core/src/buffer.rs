@@ -263,7 +263,7 @@ impl TextBuffer {
             }
         }
         let mut sorted = edits.to_vec();
-        sorted.sort_by(|a, b| b.range.start.cmp(&a.range.start));
+        sorted.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
         for pair in sorted.windows(2) {
             // 降順に並んでいるので、後続 (文書内で手前) の終端が先行の開始を超えたら重なり。
             if pair[1].range.end > pair[0].range.start {

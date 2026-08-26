@@ -115,13 +115,17 @@ impl TerminalService {
         }
         spawn_reader(
             id,
-            reader,
-            child,
-            Arc::clone(&emulator),
-            writer,
-            Arc::clone(&self.sessions),
-            self.events.clone(),
-            Arc::clone(&finished),
+            ReaderHandles {
+                reader,
+                child,
+                emulator: Arc::clone(&emulator),
+                writer,
+                finished: Arc::clone(&finished),
+            },
+            ServiceHandles {
+                sessions: Arc::clone(&self.sessions),
+                events: self.events.clone(),
+            },
         );
         spawn_flusher(id, emulator, self.events.clone(), finished);
         Ok(id)
@@ -262,20 +266,33 @@ fn build_command(spec: &TerminalSpec) -> CommandBuilder {
     cmd
 }
 
-/// PTY を読んでエミュレータへ流し続ける。終了時に片付けと `TerminalExited` を担う。
-///
-/// `writer` は端末クエリ (DSR / DA) への応答を書き戻すために持つ。応答が遅れると
-/// カーソル位置を尋ねるプロンプトが待ち続けるので、送出スレッドの周期には載せない。
-fn spawn_reader(
-    id: TerminalId,
-    mut reader: Box<dyn Read + Send>,
+/// [`spawn_reader`] が専有する、この PTY セッション個別のハンドル。
+struct ReaderHandles {
+    reader: Box<dyn Read + Send>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     emulator: Arc<Mutex<TerminalEmulator>>,
+    /// 端末クエリ (DSR / DA) への応答を書き戻すために持つ。応答が遅れると
+    /// カーソル位置を尋ねるプロンプトが待ち続けるので、送出スレッドの周期には載せない。
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    finished: Arc<AtomicBool>,
+}
+
+/// [`spawn_reader`] が `TerminalService` 全体と共有する状態。
+struct ServiceHandles {
     sessions: Sessions,
     events: broadcast::Sender<Event>,
-    finished: Arc<AtomicBool>,
-) {
+}
+
+/// PTY を読んでエミュレータへ流し続ける。終了時に片付けと `TerminalExited` を担う。
+fn spawn_reader(id: TerminalId, handles: ReaderHandles, service: ServiceHandles) {
+    let ReaderHandles {
+        mut reader,
+        child,
+        emulator,
+        writer,
+        finished,
+    } = handles;
+    let ServiceHandles { sessions, events } = service;
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {

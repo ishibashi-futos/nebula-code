@@ -27,7 +27,6 @@ pub struct EditorLayoutInfo {
     /// 本文の左上 (ガターの右側)。
     pub text_origin: Point<Pixels>,
     pub visible_rows: f32,
-    pub gutter_width: Pixels,
 }
 
 pub struct EditorElement {
@@ -385,7 +384,6 @@ impl Element for EditorElement {
             line_height: prepaint.line_height,
             text_origin: prepaint.text_origin,
             visible_rows: prepaint.visible_rows,
-            gutter_width: prepaint.gutter_width,
         };
         self.view.update(cx, |view, _cx| {
             view.last_layout = Some(layout);
@@ -518,7 +516,7 @@ fn build_runs(
             wavy: true,
         };
         for slot in &mut underlines[from.min(line_chars)..to.max(from).min(line_chars)] {
-            *slot = Some(style.clone());
+            *slot = Some(style);
         }
     }
 
@@ -535,7 +533,7 @@ fn build_runs(
             wavy: false,
         };
         for slot in &mut underlines[from..to] {
-            *slot = Some(style.clone());
+            *slot = Some(style);
         }
     }
 
@@ -544,7 +542,7 @@ fn build_runs(
     let mut current: Option<(Hsla, Option<UnderlineStyle>, bool, usize)> = None;
     for (index, c) in line_text.chars().enumerate() {
         let color = colors[index];
-        let underline = underlines[index].clone();
+        let underline = underlines[index];
         let is_bold = bold[index];
         let byte_len = c.len_utf8();
         match &mut current {
@@ -561,7 +559,7 @@ fn build_runs(
                     font: run_font(text_style, *run_bold),
                     color: *run_color,
                     background_color: None,
-                    underline: run_underline.clone(),
+                    underline: *run_underline,
                     strikethrough: None,
                 });
                 current = Some((color, underline, is_bold, byte_len));

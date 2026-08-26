@@ -948,7 +948,7 @@ impl ExplorerView {
                         .flex_none()
                         .text_size(px(10.5))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(status_color(code, &theme))
+                        .text_color(status_color(code, theme))
                         .child(status_char(code).to_string()),
                 )
             })

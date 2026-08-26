@@ -29,7 +29,7 @@ use nebula_protocol::{
     CodexConversationId, CodexEvent, CodexSandboxPolicy, CodexSessionSpec, CodexTokenUsage, Event,
     Request, Response, WorkspaceInfo,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 等幅で出すブロックの書体。書体名は theme.rs の metrics に集約してある。
 const MONO_FONT: &str = metrics::MONO_FONT_FAMILY;
@@ -1224,7 +1224,7 @@ impl CodexView {
     fn render_exec(
         &self,
         command: &[String],
-        cwd: &PathBuf,
+        cwd: &Path,
         output: &str,
         exit_code: Option<i32>,
         cx: &mut Context<Self>,

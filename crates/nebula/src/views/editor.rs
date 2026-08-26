@@ -446,7 +446,7 @@ impl EditorArea {
             .workspace
             .as_ref()
             .map(|w| w.root.clone())
-            .unwrap_or_else(|| std::env::temp_dir());
+            .unwrap_or_else(std::env::temp_dir);
         let prompt = cx.prompt_for_new_path(&directory, None);
         cx.spawn(async move |_this, cx| {
             if let Ok(Ok(Some(path))) = prompt.await {

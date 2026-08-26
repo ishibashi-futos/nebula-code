@@ -413,12 +413,7 @@ impl TerminalView {
             let (row, col) = position_to_cell(
                 f32::from(event.position.x),
                 f32::from(event.position.y),
-                f32::from(metrics.origin.x),
-                f32::from(metrics.origin.y),
-                f32::from(metrics.cell_width),
-                f32::from(metrics.line_height),
-                metrics.rows,
-                metrics.cols,
+                &metrics,
             );
             self.selection = Some(GridSelection::caret(row, col));
             self.selecting = true;
@@ -448,12 +443,7 @@ impl TerminalView {
         let (row, col) = position_to_cell(
             f32::from(event.position.x),
             f32::from(event.position.y),
-            f32::from(metrics.origin.x),
-            f32::from(metrics.origin.y),
-            f32::from(metrics.cell_width),
-            f32::from(metrics.line_height),
-            metrics.rows,
-            metrics.cols,
+            &metrics,
         );
         let Some(selection) = self.selection.as_mut() else {
             return;
@@ -1119,22 +1109,22 @@ fn grid_dimensions(width: f32, height: f32, cell_width: f32, line_height: f32) -
 /// グリッド上の桁幅そのものは変わらない (ファイル冒頭のコメント参照)。
 /// 領域の外に出ても呼び出し側が扱いやすいよう、常に有効な行・桁へ丸める
 /// (負値は 0 へ、右端・下端を超える値は最終桁・最終行へ)。
-fn position_to_cell(
-    x: f32,
-    y: f32,
-    origin_x: f32,
-    origin_y: f32,
-    cell_width: f32,
-    line_height: f32,
-    rows: u16,
-    cols: u16,
-) -> (usize, usize) {
-    if cell_width <= 0.0 || line_height <= 0.0 || rows == 0 || cols == 0 {
+fn position_to_cell(x: f32, y: f32, metrics: &GridMetrics) -> (usize, usize) {
+    let cell_width = f32::from(metrics.cell_width);
+    let line_height = f32::from(metrics.line_height);
+    if cell_width <= 0.0 || line_height <= 0.0 || metrics.rows == 0 || metrics.cols == 0 {
         return (0, 0);
     }
-    let col = ((x - origin_x) / cell_width).floor().max(0.0) as usize;
-    let row = ((y - origin_y) / line_height).floor().max(0.0) as usize;
-    (row.min(rows as usize - 1), col.min(cols as usize - 1))
+    let col = ((x - f32::from(metrics.origin.x)) / cell_width)
+        .floor()
+        .max(0.0) as usize;
+    let row = ((y - f32::from(metrics.origin.y)) / line_height)
+        .floor()
+        .max(0.0) as usize;
+    (
+        row.min(metrics.rows as usize - 1),
+        col.min(metrics.cols as usize - 1),
+    )
 }
 
 /// 変化した行をグリッドへ反映する。
@@ -1793,12 +1783,20 @@ mod tests {
 
     // -- 選択 (マウス座標 -> セル、セル -> コピー用テキスト) --
 
+    /// `position_to_cell` のテストで共通して使う寸法 (原点 (100, 50)、1 セル 8x16、24 行 80 列)。
+    fn テスト用メトリクス() -> GridMetrics {
+        GridMetrics {
+            cell_width: px(8.0),
+            line_height: px(16.0),
+            rows: 24,
+            cols: 80,
+            origin: point(px(100.0), px(50.0)),
+        }
+    }
+
     #[test]
     fn 左上の角ちょうどは_0_行_0_列になる() {
-        assert_eq!(
-            position_to_cell(100.0, 50.0, 100.0, 50.0, 8.0, 16.0, 24, 80),
-            (0, 0)
-        );
+        assert_eq!(position_to_cell(100.0, 50.0, &テスト用メトリクス()), (0, 0));
     }
 
     #[test]
@@ -1806,29 +1804,20 @@ mod tests {
         // 80 列 24 行なら最終セルは列 79・行 23。その左上ぴったりを指す。
         let x = 100.0 + 8.0 * 79.0;
         let y = 50.0 + 16.0 * 23.0;
-        assert_eq!(
-            position_to_cell(x, y, 100.0, 50.0, 8.0, 16.0, 24, 80),
-            (23, 79)
-        );
+        assert_eq!(position_to_cell(x, y, &テスト用メトリクス()), (23, 79));
     }
 
     #[test]
     fn 領域より左上の負値は_0_行_0_列に丸められる() {
         // 原点 (100, 50) より左上の座標を渡す。相対位置が負になるケース。
-        assert_eq!(
-            position_to_cell(0.0, 0.0, 100.0, 50.0, 8.0, 16.0, 24, 80),
-            (0, 0)
-        );
+        assert_eq!(position_to_cell(0.0, 0.0, &テスト用メトリクス()), (0, 0));
     }
 
     #[test]
     fn 領域より右下の大きすぎる値は最終行最終列に丸められる() {
         let x = 100.0 + 8.0 * 1000.0;
         let y = 50.0 + 16.0 * 1000.0;
-        assert_eq!(
-            position_to_cell(x, y, 100.0, 50.0, 8.0, 16.0, 24, 80),
-            (23, 79)
-        );
+        assert_eq!(position_to_cell(x, y, &テスト用メトリクス()), (23, 79));
     }
 
     #[test]
@@ -1836,10 +1825,7 @@ mod tests {
         // 全角文字は 2 列を占めるが、字送り幅そのものは列ごとに一定
         // (ファイル冒頭のコメント参照)。後続セル (列 1) の範囲内なら列 1 が返ればよい。
         let x = 100.0 + 8.0 * 1.0 + 4.0;
-        assert_eq!(
-            position_to_cell(x, 50.0, 100.0, 50.0, 8.0, 16.0, 24, 80),
-            (0, 1)
-        );
+        assert_eq!(position_to_cell(x, 50.0, &テスト用メトリクス()), (0, 1));
     }
 
     /// テスト用のグリッド。"hello world" の 1 行だけ。

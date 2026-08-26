@@ -207,8 +207,15 @@ fn paint_spans(
     let mut spans: Vec<HighlightSpan> = Vec::new();
     let mut run_start = 0usize;
     let mut run_token = paint.first().copied().flatten();
-    for i in 1..=width {
-        let token = if i < width { paint[i] } else { None };
+    // `width` 番目は境界を越えた番兵 (`None`) として扱い、末尾の連続区間を必ず 1 つ確定させる。
+    let tail = paint
+        .iter()
+        .skip(1)
+        .copied()
+        .chain(std::iter::once(None))
+        .take(width);
+    for (offset, token) in tail.enumerate() {
+        let i = offset + 1;
         if token != run_token || i == width {
             if let Some(kind) = run_token {
                 spans.push(HighlightSpan {

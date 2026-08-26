@@ -543,8 +543,8 @@ impl SearchView {
             is_regex: self.is_regex,
             case_sensitive: self.case_sensitive,
             whole_word: self.whole_word,
-            include_globs: parse_globs(&self.include_input.read(cx).text()),
-            exclude_globs: parse_globs(&self.exclude_input.read(cx).text()),
+            include_globs: parse_globs(self.include_input.read(cx).text()),
+            exclude_globs: parse_globs(self.exclude_input.read(cx).text()),
             ..SearchQuery::default()
         }
     }
