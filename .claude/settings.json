@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/gate-commit.sh",
+            "timeout": 240,
+            "statusMessage": "コミット前に整形 (cargo fmt) と Lint (cargo clippy) を確認中..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/gate-stop.sh",
+            "timeout": 240,
+            "statusMessage": "整形 (cargo fmt) と Lint (cargo clippy) を確認中..."
+          }
+        ]
+      }
+    ]
+  }
+}
